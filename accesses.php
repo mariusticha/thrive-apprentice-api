@@ -61,9 +61,6 @@ add_action('rest_api_init', function () {
 
 function apprentice_get_accesses(WP_REST_Request $request)
 {
-    return [
-        'hello' => 'world',
-    ];
     $params = $request->get_json_params();
 
     $hasUserIds = isset($params['user_ids']);
