@@ -214,19 +214,16 @@ function get_accesses_by_time(WP_REST_Request $request)
 
     $table = $wpdb->prefix . 'tva_access_history';
 
-    $query = sprintf(
-        "SELECT * FROM {$table} WHERE created >= \"%s\" AND created <= \"%s\" ORDER BY created ASC",
-        $since,
-        $until
-    );
-
     $rows = $wpdb->get_results(
-        $wpdb->prepare($query),
+        $wpdb->prepare(
+            "SELECT * FROM {$table} WHERE created >= \"%s\" AND created <= \"%s\" ORDER BY created ASC",
+            $since,
+            $until
+        ),
         ARRAY_A
     );
 
     return [
-        'query' => $query,
         'rows' => $rows,
     ];
 
