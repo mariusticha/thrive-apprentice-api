@@ -204,7 +204,13 @@ function get_accesses_by_time(WP_REST_Request $request)
 
     $params = $request->get_json_params();
 
-    [$since, $until] = parse_since_and_until($params);
+    $parsed_params = parse_since_and_until($params);
+
+    if ($parsed_params instanceof WP_Error) {
+        return $parsed_params;
+    }
+
+    [$since, $until] = $parsed_params;
 
     $table = $wpdb->prefix . 'tva_access_history';
 
@@ -394,21 +400,21 @@ function parse_since_and_until($params)
     $since = $params['since'] ?? null;
 
     if (empty($since)) {
-        exit(new WP_Error(
+        return new WP_Error(
             'missing_since',
             "The 'since' parameter is required.",
             ['status' => 400]
-        ));
+        );
     }
 
     $parsed_since = strtotime($since);
 
     if ($parsed_since  === false) {
-        exit(new WP_Error(
+        return new WP_Error(
             'invalid_since',
             "The 'since' parameter must be a valid date or datetime string.",
             ['status' => 400]
-        ));
+        );
     }
 
     $since = date('Y-m-d H:i:s', $parsed_since);
@@ -417,21 +423,21 @@ function parse_since_and_until($params)
         $until = $params['until'];
 
         if (empty($until)) {
-            exit(new WP_Error(
+            return new WP_Error(
                 'invalid_until',
                 "The 'until' parameter cannot be empty when provided.",
                 ['status' => 400]
-            ));
+            );
         }
 
         $parsed_until = strtotime($until);
 
         if ($parsed_until === false) {
-            exit(new WP_Error(
+            return new WP_Error(
                 'invalid_until',
                 "The 'until' parameter must be a valid date or datetime string.",
                 ['status' => 400]
-            ));
+            );
         }
 
         $until = date('Y-m-d H:i:s', $parsed_until);
@@ -448,11 +454,11 @@ function parse_since_and_until($params)
 
         // Check that until is later than since
         if ($parsed_until <= $parsed_since) {
-            exit(new WP_Error(
+            return new WP_Error(
                 'invalid_date_range',
                 "The 'until' parameter must be later than 'since'.",
                 ['status' => 400]
-            ));
+            );
         }
     } else {
         $until = current_time('mysql');
