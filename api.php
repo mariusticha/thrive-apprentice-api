@@ -214,9 +214,8 @@ function get_accesses_by_time(WP_REST_Request $request)
 
     $table = $wpdb->prefix . 'tva_access_history';
 
-    $rows = $wpdb->get_results(
-        $wpdb->prepare(
-            "
+    $query = sprintf(
+        "
             SELECT
                 user_id,
                 product_id,
@@ -230,11 +229,19 @@ function get_accesses_by_time(WP_REST_Request $request)
               AND created <= %s
             ORDER BY created ASC
             ",
-            $since,
-            $until
-        ),
+        $since,
+        $until
+    );
+
+    $rows = $wpdb->get_results(
+        $wpdb->prepare($query),
         ARRAY_A
     );
+
+    return [
+        'query' => $query,
+        'rows' => $rows,
+    ];
 
     $events = array_map(function ($row) {
         return [
@@ -249,7 +256,6 @@ function get_accesses_by_time(WP_REST_Request $request)
     }, $rows);
 
     return [
-        'mode'  => 'delta',
         'since' => $since,
         'until' => $until,
         'events' => $events,
