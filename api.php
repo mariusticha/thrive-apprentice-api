@@ -248,6 +248,25 @@ function get_accesses_by_time(WP_REST_Request $request)
         }
 
         $until = date('Y-m-d H:i:s', $parsed_until);
+
+        // If no time component in $until, set to end of day (23:59:59)
+        $date_only = date('Y-m-d', $parsed_until);
+        $datetime_check = date('Y-m-d H:i:s', $parsed_until);
+
+        if ($datetime_check === $date_only . ' 00:00:00') {
+            $parsed_until = strtotime($date_only . ' 23:59:59');
+        }
+
+        $until = date('Y-m-d H:i:s', $parsed_until);
+
+        // Check that until is later than since
+        if ($parsed_until <= $parsed_since) {
+            return new WP_Error(
+                'invalid_date_range',
+                'The "until" parameter must be later than "since".',
+                ['status' => 400]
+            );
+        }
     } else {
         $until = current_time('mysql');
     }
