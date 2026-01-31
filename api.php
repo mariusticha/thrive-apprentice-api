@@ -220,7 +220,6 @@ function get_accesses_by_user_ids(WP_REST_Request $request)
                 'course_id'  => (int) $entry['course_id'],
                 'granted_at' => $entry['created'],
                 'expires_at' => $expires_at,
-                'expiry_mode' => $expiry_info['mode'],
                 'expiry_details' => $expiry_info,
                 'source'     => $entry['source'],
                 'status'     => (int) $entry['status'],
@@ -325,7 +324,6 @@ function get_accesses_by_time(WP_REST_Request $request)
             'source'     => $row['source'],
             'created_at' => $row['created'],
             'expires_at' => $user_product_map[$key] ?? null,
-            'expiry_mode' => $expiry_info['mode'],
             'expiry_details' => $expiry_info,
         ];
     }, $rows);
