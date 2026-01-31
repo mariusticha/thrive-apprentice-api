@@ -106,6 +106,31 @@ function get_accesses_by_user_ids(WP_REST_Request $request)
         );
     }
 
+    // BATCH FETCH ALL TERMMETA EXPIRY CONFIGS!
+    $all_product_ids = $wpdb->get_col(
+        $wpdb->prepare(
+            "SELECT DISTINCT product_id FROM {$wpdb->prefix}tva_access_history WHERE user_id IN (" . implode(',', array_fill(0, count($user_ids), '%d')) . ")",
+            ...$user_ids
+        )
+    );
+
+    $expiry_configs = [];
+
+    if (!empty($all_product_ids)) {
+        $placeholders = implode(',', array_fill(0, count($all_product_ids), '%d'));
+        $expiry_rows = $wpdb->get_results(
+            $wpdb->prepare(
+                "SELECT term_id, meta_value FROM {$wpdb->termmeta} WHERE term_id IN ($placeholders) AND meta_key = 'access_expiry'",
+                ...$all_product_ids
+            ),
+            ARRAY_A
+        );
+
+        foreach ($expiry_rows as $row) {
+            $expiry_configs[(int) $row['term_id']] = $row['meta_value'];
+        }
+    }
+
     $results = [];
 
     foreach ($user_ids as $user_id) {
@@ -176,14 +201,27 @@ function get_accesses_by_user_ids(WP_REST_Request $request)
 
             $product_id = (int) $entry['product_id'];
 
-            $accesses[] = [
+            $resolved = resolve_access_expiry(
+                $product_id,
+                $expiry_configs,
+                $expiry_map[$product_id] ?? null
+            );
+
+            $access_entry = [
                 'product_id' => $product_id,
                 'course_id'  => (int) $entry['course_id'],
                 'granted_at' => $entry['created'],
-                'expires_at' => $expiry_map[$product_id] ?? null,
+                'expires_at' => $resolved['expires_at'],
+                'expiry_details' => $resolved['expiry_details'],
                 'source'     => $entry['source'],
                 'status'     => (int) $entry['status'],
             ];
+
+            if ($resolved['validation_error'] !== null) {
+                $access_entry['validation_error'] = $resolved['validation_error'];
+            }
+
+            $accesses[] = $access_entry;
         }
 
         $results[] = [
@@ -223,15 +261,80 @@ function get_accesses_by_time(WP_REST_Request $request)
         ARRAY_A
     );
 
-    $events = array_map(function ($row) {
-        return [
-            'user_id'    => (int) $row['user_id'],
-            'product_id' => (int) $row['product_id'],
+    // BATCH FETCH TERMMETA EXPIRY CONFIGS FOR ALL PRODUCTS!
+    $unique_product_ids = array_unique(array_column($rows, 'product_id'));
+    $expiry_configs = [];
+
+    if (!empty($unique_product_ids)) {
+        $placeholders = implode(',', array_fill(0, count($unique_product_ids), '%d'));
+        $expiry_rows = $wpdb->get_results(
+            $wpdb->prepare(
+                "SELECT term_id, meta_value FROM {$wpdb->termmeta} WHERE term_id IN ($placeholders) AND meta_key = 'access_expiry'",
+                ...$unique_product_ids
+            ),
+            ARRAY_A
+        );
+
+        foreach ($expiry_rows as $row) {
+            $expiry_configs[(int) $row['term_id']] = $row['meta_value'];
+        }
+    }
+
+    // BATCH FETCH USERMETA EXPIRY DATES FOR ALL USER+PRODUCT COMBOS!
+    $user_product_map = [];
+
+    if (!empty($rows)) {
+        // Build list of unique user_id + product_id pairs
+        $user_ids = array_unique(array_column($rows, 'user_id'));
+
+        // Fetch all expiry dates for these users
+        $placeholders = implode(',', array_fill(0, count($user_ids), '%d'));
+        $expiry_dates = $wpdb->get_results(
+            $wpdb->prepare(
+                "SELECT user_id, meta_key, meta_value FROM {$wpdb->usermeta} WHERE user_id IN ($placeholders) AND meta_key LIKE 'tva_product%%_access_expiry'",
+                ...$user_ids
+            ),
+            ARRAY_A
+        );
+
+        foreach ($expiry_dates as $row) {
+            if (preg_match('/tva_product_(\\d+)_access_expiry/', $row['meta_key'], $m)) {
+                $user_id = (int) $row['user_id'];
+                $product_id = (int) $m[1];
+                $key = $user_id . '_' . $product_id;
+                $user_product_map[$key] = $row['meta_value'] !== '' ? $row['meta_value'] : null;
+            }
+        }
+    }
+
+    $events = array_map(function ($row) use ($expiry_configs, $user_product_map) {
+        $product_id = (int) $row['product_id'];
+        $user_id = (int) $row['user_id'];
+        $key = $user_id . '_' . $product_id;
+
+        $resolved = resolve_access_expiry(
+            $product_id,
+            $expiry_configs,
+            $user_product_map[$key] ?? null,
+            $user_id
+        );
+
+        $event = [
+            'user_id'    => $user_id,
+            'product_id' => $product_id,
             'course_id'  => (int) $row['course_id'],
             'status'     => (int) $row['status'],
             'source'     => $row['source'],
             'created_at' => $row['created'],
+            'expires_at' => $resolved['expires_at'],
+            'expiry_details' => $resolved['expiry_details'],
         ];
+
+        if ($resolved['validation_error'] !== null) {
+            $event['validation_error'] = $resolved['validation_error'];
+        }
+
+        return $event;
     }, $rows);
 
     return [
@@ -549,9 +652,17 @@ function parse_product_expiry($product_id, $expiry_configs)
 
     // SPECIFIC TIME MODE
     if ($cond === 'specific_time' && !empty($expiry['cond_datetime'])) {
+        // Normalize date to include seconds (default to :59 for expiry times)
+        $date = $expiry['cond_datetime'];
+
+        // If date doesn't have seconds, add :59
+        if (preg_match('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/', $date)) {
+            $date .= ':59';
+        }
+
         return [
             'mode' => 'specific_time',
-            'date' => $expiry['cond_datetime'],
+            'date' => $date,
             'duration' => null,
         ];
     }
@@ -574,5 +685,43 @@ function parse_product_expiry($product_id, $expiry_configs)
     return [
         'mode' => 'other',
         'message' => 'other expiry: ' . ($cond ?? 'unknown'),
+    ];
+}
+
+/**
+ * Resolve expires_at date and validate based on expiry mode
+ *
+ * @param int $product_id The product ID
+ * @param array $expiry_configs Termmeta expiry configurations
+ * @param mixed $usermeta_expiry The usermeta expiry value (could be from $expiry_map or $user_product_map)
+ * @param int|null $user_id Optional user ID for error messages
+ * @return array ['expires_at' => string|null, 'expiry_details' => array, 'validation_error' => string|null]
+ */
+function resolve_access_expiry($product_id, $expiry_configs, $usermeta_expiry, $user_id = null)
+{
+    $expiry_info = parse_product_expiry($product_id, $expiry_configs);
+
+    $expires_at = null;
+    $validation_error = null;
+
+    if ($expiry_info['mode'] === 'specific_time' && isset($expiry_info['date'])) {
+        // For specific_time, use the date from termmeta (same for all users)
+        $expires_at = $expiry_info['date'];
+    } elseif ($expiry_info['mode'] === 'after_purchase') {
+        // For after_purchase, use the calculated date from usermeta
+        $expires_at = $usermeta_expiry;
+
+        // SANITY CHECK: after_purchase MUST have usermeta entry
+        if ($expires_at === null) {
+            $user_context = $user_id !== null ? " for user {$user_id}" : "";
+            $validation_error = "ERROR: after_purchase mode requires tva_product_{$product_id}_access_expiry{$user_context} but it's missing";
+        }
+    }
+    // For unlimited or other modes, expires_at remains null
+
+    return [
+        'expires_at' => $expires_at,
+        'expiry_details' => $expiry_info,
+        'validation_error' => $validation_error,
     ];
 }
