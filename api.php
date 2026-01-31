@@ -204,86 +204,7 @@ function get_accesses_by_time(WP_REST_Request $request)
 
     $params = $request->get_json_params();
 
-    $since = $params['since'] ?? null;
-
-    if (empty($since)) {
-        return new WP_Error(
-            'missing_since',
-            'The "since" parameter is required.',
-            ['status' => 400]
-        );
-    }
-
-    $parsed_since = strtotime($since);
-
-    if ($parsed_since  === false) {
-        return new WP_Error(
-            'invalid_since',
-            'The "since" parameter must be a valid date or datetime string.',
-            ['status' => 400]
-        );
-    }
-
-    $since = date('Y-m-d H:i:s', $parsed_since);
-
-    if (array_key_exists('until', $params)) {
-        $until = $params['until'];
-
-        if (empty($until)) {
-            return new WP_Error(
-                'invalid_until',
-                'The "until" parameter cannot be empty when provided.',
-                ['status' => 400]
-            );
-        }
-
-        $parsed_until = strtotime($until);
-
-        if ($parsed_until === false) {
-            return new WP_Error(
-                'invalid_until',
-                'The "until" parameter must be a valid date or datetime string.',
-                ['status' => 400]
-            );
-        }
-
-        $until = date('Y-m-d H:i:s', $parsed_until);
-
-        // If no time component in $until, set to end of day (23:59:59)
-        $date_only = date('Y-m-d', $parsed_until);
-        $datetime_check = date('Y-m-d H:i:s', $parsed_until);
-
-        if ($datetime_check === $date_only . ' 00:00:00') {
-            $parsed_until = strtotime($date_only . ' 23:59:59');
-        }
-
-        $until = date('Y-m-d H:i:s', $parsed_until);
-
-        // Check that until is later than since
-        if ($parsed_until <= $parsed_since) {
-            return new WP_Error(
-                'invalid_date_range',
-                'The "until" parameter must be later than "since".',
-                ['status' => 400]
-            );
-        }
-    } else {
-        $until = current_time('mysql');
-    }
-
-    return [
-        'since' => $since,
-        'until' => $until,
-    ];
-
-    // basic sanity check
-    if (strtotime($since) === false || strtotime($until) === false) {
-        return new WP_Error(
-            'invalid_date',
-            'Invalid since or until date format.',
-            ['status' => 400]
-        );
-    }
+    [$since, $until] = parse_since_and_until($params);
 
     $table = $wpdb->prefix . 'tva_access_history';
 
@@ -328,7 +249,6 @@ function get_accesses_by_time(WP_REST_Request $request)
         'events' => $events,
     ];
 }
-
 
 function apprentice_product_course_map()
 {
@@ -468,6 +388,78 @@ function apprentice_product_course_map()
 
 
 /* - - -  H E L P E R S  - - - */
+
+function parse_since_and_until($params)
+{
+    $since = $params['since'] ?? null;
+
+    if (empty($since)) {
+        exit(new WP_Error(
+            'missing_since',
+            "The 'since' parameter is required.",
+            ['status' => 400]
+        ));
+    }
+
+    $parsed_since = strtotime($since);
+
+    if ($parsed_since  === false) {
+        exit(new WP_Error(
+            'invalid_since',
+            "The 'since' parameter must be a valid date or datetime string.",
+            ['status' => 400]
+        ));
+    }
+
+    $since = date('Y-m-d H:i:s', $parsed_since);
+
+    if (array_key_exists('until', $params)) {
+        $until = $params['until'];
+
+        if (empty($until)) {
+            exit(new WP_Error(
+                'invalid_until',
+                "The 'until' parameter cannot be empty when provided.",
+                ['status' => 400]
+            ));
+        }
+
+        $parsed_until = strtotime($until);
+
+        if ($parsed_until === false) {
+            exit(new WP_Error(
+                'invalid_until',
+                "The 'until' parameter must be a valid date or datetime string.",
+                ['status' => 400]
+            ));
+        }
+
+        $until = date('Y-m-d H:i:s', $parsed_until);
+
+        // If no time component in $until, set to end of day (23:59:59)
+        $date_only = date('Y-m-d', $parsed_until);
+        $datetime_check = date('Y-m-d H:i:s', $parsed_until);
+
+        if ($datetime_check === $date_only . ' 00:00:00') {
+            $parsed_until = strtotime($date_only . ' 23:59:59');
+        }
+
+        $until = date('Y-m-d H:i:s', $parsed_until);
+
+        // Check that until is later than since
+        if ($parsed_until <= $parsed_since) {
+            exit(new WP_Error(
+                'invalid_date_range',
+                "The 'until' parameter must be later than 'since'.",
+                ['status' => 400]
+            ));
+        }
+    } else {
+        $until = current_time('mysql');
+    }
+
+    return [$since, $until];
+}
 
 function apprentice_extract_course_ids($post_content)
 {
