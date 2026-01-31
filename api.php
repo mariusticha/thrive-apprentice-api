@@ -201,38 +201,24 @@ function get_accesses_by_user_ids(WP_REST_Request $request)
 
             $product_id = (int) $entry['product_id'];
 
-            $expiry_info = parse_product_expiry($product_id, $expiry_configs);
-
-            // Determine expires_at based on expiry mode
-            $expires_at = null;
-            $validation_error = null;
-
-            if ($expiry_info['mode'] === 'specific_time' && isset($expiry_info['date'])) {
-                // For specific_time, use the date from termmeta (same for all users)
-                $expires_at = $expiry_info['date'];
-            } elseif ($expiry_info['mode'] === 'after_purchase') {
-                // For after_purchase, use the calculated date from usermeta
-                $expires_at = $expiry_map[$product_id] ?? null;
-
-                // SANITY CHECK: after_purchase MUST have usermeta entry
-                if ($expires_at === null) {
-                    $validation_error = "ERROR: after_purchase mode requires tva_product_{$product_id}_access_expiry in usermeta but it's missing";
-                }
-            }
-            // For perpetual or other modes, expires_at remains null
+            $resolved = resolve_access_expiry(
+                $product_id,
+                $expiry_configs,
+                $expiry_map[$product_id] ?? null
+            );
 
             $access_entry = [
                 'product_id' => $product_id,
                 'course_id'  => (int) $entry['course_id'],
                 'granted_at' => $entry['created'],
-                'expires_at' => $expires_at,
-                'expiry_details' => $expiry_info,
+                'expires_at' => $resolved['expires_at'],
+                'expiry_details' => $resolved['expiry_details'],
                 'source'     => $entry['source'],
                 'status'     => (int) $entry['status'],
             ];
 
-            if ($validation_error !== null) {
-                $access_entry['validation_error'] = $validation_error;
+            if ($resolved['validation_error'] !== null) {
+                $access_entry['validation_error'] = $resolved['validation_error'];
             }
 
             $accesses[] = $access_entry;
@@ -326,21 +312,12 @@ function get_accesses_by_time(WP_REST_Request $request)
         $user_id = (int) $row['user_id'];
         $key = $user_id . '_' . $product_id;
 
-        $expiry_info = parse_product_expiry($product_id, $expiry_configs);
-
-        $expires_at = null;
-        $validation_error = null;
-
-        if ($expiry_info['mode'] === 'specific_time' && isset($expiry_info['date'])) {
-            $expires_at = $expiry_info['date'];
-        } elseif ($expiry_info['mode'] === 'after_purchase') {
-            $expires_at = $user_product_map[$key] ?? null;
-
-            // SANITY CHECK: after_purchase MUST have usermeta entry
-            if ($expires_at === null) {
-                $validation_error = "ERROR: after_purchase mode requires tva_product_{$product_id}_access_expiry for user {$user_id} but it's missing";
-            }
-        }
+        $resolved = resolve_access_expiry(
+            $product_id,
+            $expiry_configs,
+            $user_product_map[$key] ?? null,
+            $user_id
+        );
 
         $event = [
             'user_id'    => $user_id,
@@ -349,12 +326,12 @@ function get_accesses_by_time(WP_REST_Request $request)
             'status'     => (int) $row['status'],
             'source'     => $row['source'],
             'created_at' => $row['created'],
-            'expires_at' => $expires_at,
-            'expiry_details' => $expiry_info,
+            'expires_at' => $resolved['expires_at'],
+            'expiry_details' => $resolved['expiry_details'],
         ];
 
-        if ($validation_error !== null) {
-            $event['validation_error'] = $validation_error;
+        if ($resolved['validation_error'] !== null) {
+            $event['validation_error'] = $resolved['validation_error'];
         }
 
         return $event;
@@ -700,5 +677,43 @@ function parse_product_expiry($product_id, $expiry_configs)
     return [
         'mode' => 'other',
         'message' => 'other expiry: ' . ($cond ?? 'unknown'),
+    ];
+}
+
+/**
+ * Resolve expires_at date and validate based on expiry mode
+ *
+ * @param int $product_id The product ID
+ * @param array $expiry_configs Termmeta expiry configurations
+ * @param mixed $usermeta_expiry The usermeta expiry value (could be from $expiry_map or $user_product_map)
+ * @param int|null $user_id Optional user ID for error messages
+ * @return array ['expires_at' => string|null, 'expiry_details' => array, 'validation_error' => string|null]
+ */
+function resolve_access_expiry($product_id, $expiry_configs, $usermeta_expiry, $user_id = null)
+{
+    $expiry_info = parse_product_expiry($product_id, $expiry_configs);
+
+    $expires_at = null;
+    $validation_error = null;
+
+    if ($expiry_info['mode'] === 'specific_time' && isset($expiry_info['date'])) {
+        // For specific_time, use the date from termmeta (same for all users)
+        $expires_at = $expiry_info['date'];
+    } elseif ($expiry_info['mode'] === 'after_purchase') {
+        // For after_purchase, use the calculated date from usermeta
+        $expires_at = $usermeta_expiry;
+
+        // SANITY CHECK: after_purchase MUST have usermeta entry
+        if ($expires_at === null) {
+            $user_context = $user_id !== null ? " for user {$user_id}" : "";
+            $validation_error = "ERROR: after_purchase mode requires tva_product_{$product_id}_access_expiry{$user_context} but it's missing";
+        }
+    }
+    // For unlimited or other modes, expires_at remains null
+
+    return [
+        'expires_at' => $expires_at,
+        'expiry_details' => $expiry_info,
+        'validation_error' => $validation_error,
     ];
 }
