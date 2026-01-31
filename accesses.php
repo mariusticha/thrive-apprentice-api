@@ -39,9 +39,6 @@ add_action('rest_api_init', function () {
             ],
         ]
     );
-});
-
-add_action('rest_api_init', function () {
 
     register_rest_route(
         'apprentice/v1',
@@ -55,6 +52,8 @@ add_action('rest_api_init', function () {
         ]
     );
 });
+
+// add_action('rest_api_init', function () {});
 
 
 /* - - -  F U N C T I O N S  - - - */
