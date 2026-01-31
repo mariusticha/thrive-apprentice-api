@@ -215,7 +215,7 @@ function get_accesses_by_time(WP_REST_Request $request)
     $table = $wpdb->prefix . 'tva_access_history';
 
     $query = sprintf(
-        " SELECT user_id, product_id, course_id, status, source, created, expires FROM {$table} WHERE created >= %s AND created <= %s ORDER BY created ASC ",
+        "SELECT * FROM {$table} WHERE created >= \"%s\" AND created <= \"%s\" ORDER BY created ASC",
         $since,
         $until
     );
