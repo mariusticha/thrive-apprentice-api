@@ -214,7 +214,9 @@ function get_accesses_by_time(WP_REST_Request $request)
         );
     }
 
-    if (strtotime($since) === false) {
+    $parsed_since = strtotime($since);
+
+    if ($parsed_since  === false) {
         return new WP_Error(
             'invalid_since',
             'The "since" parameter must be a valid date or datetime string.',
@@ -222,12 +224,38 @@ function get_accesses_by_time(WP_REST_Request $request)
         );
     }
 
-    return strtotime($since);
+    $since = date('Y-m-d H:i:s', $parsed_since);
 
-    $since = date('Y-m-d H:i:s', strtotime($since));
+    if (array_key_exists('until', $params)) {
+        $until = $params['until'];
 
-    $since = date('Y-m-d H:i:s', $params['since']);
-    $until = $params['until'] ?? current_time('mysql');
+        if (empty($until)) {
+            return new WP_Error(
+                'invalid_until',
+                'The "until" parameter cannot be empty when provided.',
+                ['status' => 400]
+            );
+        }
+
+        $parsed_until = strtotime($until);
+
+        if ($parsed_until === false) {
+            return new WP_Error(
+                'invalid_until',
+                'The "until" parameter must be a valid date or datetime string.',
+                ['status' => 400]
+            );
+        }
+
+        $until = date('Y-m-d H:i:s', $parsed_until);
+    } else {
+        $until = current_time('mysql');
+    }
+
+    return [
+        'since' => $since,
+        'until' => $until,
+    ];
 
     // basic sanity check
     if (strtotime($since) === false || strtotime($until) === false) {
