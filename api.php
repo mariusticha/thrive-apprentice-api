@@ -652,9 +652,17 @@ function parse_product_expiry($product_id, $expiry_configs)
 
     // SPECIFIC TIME MODE
     if ($cond === 'specific_time' && !empty($expiry['cond_datetime'])) {
+        // Normalize date to include seconds (default to :59 for expiry times)
+        $date = $expiry['cond_datetime'];
+
+        // If date doesn't have seconds, add :59
+        if (preg_match('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/', $date)) {
+            $date .= ':59';
+        }
+
         return [
             'mode' => 'specific_time',
-            'date' => $expiry['cond_datetime'],
+            'date' => $date,
             'duration' => null,
         ];
     }
