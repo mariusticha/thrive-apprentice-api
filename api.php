@@ -204,7 +204,29 @@ function get_accesses_by_time(WP_REST_Request $request)
 
     $params = $request->get_json_params();
 
-    $since = $params['since'];
+    $since = $params['since'] ?? null;
+
+    if (empty($since)) {
+        return new WP_Error(
+            'missing_since',
+            'The "since" parameter is required.',
+            ['status' => 400]
+        );
+    }
+
+    if (strtotime($since) === false) {
+        return new WP_Error(
+            'invalid_since',
+            'The "since" parameter must be a valid date or datetime string.',
+            ['status' => 400]
+        );
+    }
+
+    return strtotime($since);
+
+    $since = date('Y-m-d H:i:s', strtotime($since));
+
+    $since = date('Y-m-d H:i:s', $params['since']);
     $until = $params['until'] ?? current_time('mysql');
 
     // basic sanity check
