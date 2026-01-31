@@ -12,6 +12,10 @@ if (! defined('ABSPATH')) {
 
 /* - - -  E N D P O I N T S - - - */
 
+/**
+ *  /accesses
+ *  /accesses/since
+ */
 add_action('rest_api_init', function () {
 
     register_rest_route(
@@ -19,7 +23,7 @@ add_action('rest_api_init', function () {
         '/accesses',
         [
             'methods'             => 'POST',
-            'callback'            => 'apprentice_get_accesses',
+            'callback'            => 'get_accesses_by_user_ids',
             'permission_callback' => function () {
                 return current_user_can('list_users');
             },
@@ -28,6 +32,20 @@ add_action('rest_api_init', function () {
                     'required' => false,
                     'type'     => 'array',
                 ],
+            ],
+        ]
+    );
+
+    register_rest_route(
+        'apprentice/v1',
+        '/accesses/since',
+        [
+            'methods'             => 'POST',
+            'callback'            => 'get_accesses_by_time',
+            'permission_callback' => function () {
+                return current_user_can('list_users');
+            },
+            'args' => [
                 'since' => [
                     'required' => false,
                     'type'     => 'string',
@@ -39,6 +57,12 @@ add_action('rest_api_init', function () {
             ],
         ]
     );
+});
+
+/**
+ *  /product-course-map
+ */
+add_action('rest_api_init', function () {
 
     register_rest_route(
         'apprentice/v1',
@@ -53,44 +77,14 @@ add_action('rest_api_init', function () {
     );
 });
 
-// add_action('rest_api_init', function () {});
-
 
 /* - - -  F U N C T I O N S  - - - */
 
-function apprentice_get_accesses(WP_REST_Request $request)
-{
-    $params = $request->get_json_params();
-
-    $hasUserIds = isset($params['user_ids']);
-    $hasSince   = isset($params['since']);
-
-    if ($hasUserIds && $hasSince) {
-        return new WP_Error(
-            'invalid_request',
-            'Provide either user_ids OR since, not both.',
-            ['status' => 400]
-        );
-    }
-
-    if (! $hasUserIds && ! $hasSince) {
-        return new WP_Error(
-            'invalid_request',
-            'Either user_ids or since must be provided.',
-            ['status' => 400]
-        );
-    }
-
-    if ($hasSince) {
-        return get_accesses_by_time($params);
-    }
-
-    return get_accesses_by_user_ids($params);
-}
-
-function get_accesses_by_user_ids(array $params)
+function get_accesses_by_user_ids(WP_REST_Request $request)
 {
     global $wpdb;
+
+    $params = $request->get_json_params();
 
     $user_ids = $params['user_ids'];
 
@@ -204,9 +198,11 @@ function get_accesses_by_user_ids(array $params)
     return $results;
 }
 
-function get_accesses_by_time(array $params)
+function get_accesses_by_time(WP_REST_Request $request)
 {
     global $wpdb;
+
+    $params = $request->get_json_params();
 
     $since = $params['since'];
     $until = $params['until'] ?? current_time('mysql');
