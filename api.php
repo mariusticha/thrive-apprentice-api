@@ -223,10 +223,6 @@ function get_accesses_by_time(WP_REST_Request $request)
         ARRAY_A
     );
 
-    return [
-        'rows' => $rows,
-    ];
-
     $events = array_map(function ($row) {
         return [
             'user_id'    => (int) $row['user_id'],
@@ -235,7 +231,6 @@ function get_accesses_by_time(WP_REST_Request $request)
             'status'     => (int) $row['status'],
             'source'     => $row['source'],
             'created_at' => $row['created'],
-            'expires_at' => $row['expires'],
         ];
     }, $rows);
 
