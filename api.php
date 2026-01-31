@@ -269,6 +269,35 @@ function apprentice_product_course_map()
         ARRAY_A
     );
 
+    /**
+     * -------------------------------------------------
+     * 1.5. Fetch ALL access_expiry configs (BATCH MODE!)
+     * -------------------------------------------------
+     */
+    $expiry_configs = [];
+
+    if (!empty($rows)) {
+        $product_ids = array_unique(array_column($rows, 'product_id'));
+        $placeholders = implode(',', array_fill(0, count($product_ids), '%d'));
+
+        $expiry_rows = $wpdb->get_results(
+            $wpdb->prepare(
+                "
+                SELECT term_id, meta_value
+                FROM {$wpdb->termmeta}
+                WHERE term_id IN ($placeholders)
+                  AND meta_key = 'access_expiry'
+                ",
+                $product_ids
+            ),
+            ARRAY_A
+        );
+
+        foreach ($expiry_rows as $row) {
+            $expiry_configs[(int) $row['term_id']] = $row['meta_value'];
+        }
+    }
+
     $products = [];
     $definition_pairs = [];
 
@@ -315,6 +344,7 @@ function apprentice_product_course_map()
             'product_id'   => $product_id,
             'product_name' => $product_name,
             'courses'      => $courses,
+            'expiry'       => parse_product_expiry($product_id, $expiry_configs),
         ];
     }
 
@@ -480,4 +510,56 @@ function apprentice_extract_course_ids($post_content)
     }
 
     return array_values(array_unique($course_ids));
+}
+
+
+function parse_product_expiry($product_id, $expiry_configs)
+{
+    if (!isset($expiry_configs[$product_id])) {
+        return [
+            'mode' => 'not_configured',
+            'message' => 'access_expiry not given for product ' . $product_id,
+        ];
+    }
+
+    $expiry_data = maybe_unserialize($expiry_configs[$product_id]);
+
+    if (!is_array($expiry_data) || !isset($expiry_data['expiry'])) {
+        return [
+            'mode' => 'not_configured',
+            'message' => 'expiry not parsable',
+        ];
+    }
+
+    $expiry = $expiry_data['expiry'];
+    $cond = $expiry['cond'] ?? null;
+
+    // SPECIFIC TIME MODE
+    if ($cond === 'specific_time' && !empty($expiry['cond_datetime'])) {
+        return [
+            'mode' => 'specific_time',
+            'date' => $expiry['cond_datetime'],
+            'duration' => null,
+        ];
+    }
+
+    // AFTER PURCHASE MODE
+    if ($cond === 'after_purchase' && isset($expiry['cond_purchase'])) {
+        $duration = $expiry['cond_purchase'];
+
+        return [
+            'mode' => 'after_purchase',
+            'date' => null,
+            'duration' => [
+                'number' => (int) ($duration['number'] ?? 0),
+                'unit' => $duration['unit'] ?? '',
+            ],
+        ];
+    }
+
+    // FALLBACK - unknown condition
+    return [
+        'mode' => 'other',
+        'message' => 'other expiry: ' . ($cond ?? 'unknown'),
+    ];
 }
