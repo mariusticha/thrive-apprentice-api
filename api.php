@@ -531,6 +531,19 @@ function parse_product_expiry($product_id, $expiry_configs)
         ];
     }
 
+    // CHECK IF EXPIRY IS DISABLED - PERPETUAL ACCESS!
+    $enabled = isset($expiry_data['enabled'])
+        ? (int) $expiry_data['enabled']
+        : 0;
+
+    if ($enabled === 0) {
+        return [
+            'mode' => 'unlimited',
+            'date' => null,
+            'duration' => null,
+        ];
+    }
+
     $expiry = $expiry_data['expiry'];
     $cond = $expiry['cond'] ?? null;
 
