@@ -480,7 +480,7 @@ function apprentice_product_course_map(): array
 
 /* - - -  H E L P E R S  - - - */
 
-function parse_since_and_until($params)
+function parse_since_and_until(array $params): WP_Error | array
 {
     $since = $params['since'] ?? null;
 
@@ -582,8 +582,79 @@ function apprentice_extract_course_ids($post_content)
     return array_values(array_unique($course_ids));
 }
 
+/**
+ * Get product to courses mapping with names
+ *
+ * @param array $product_ids Array of product IDs to get courses for
+ * @return array Map of product_id => [['course_id' => X, 'course_name' => 'Y'], ...]
+ */
+function get_product_courses_map(array $product_ids): array
+{
+    global $wpdb;
 
-function parse_product_expiry($product_id, $expiry_configs)
+    if (empty($product_ids)) {
+        return [];
+    }
+
+    $placeholders = implode(',', array_fill(0, count($product_ids), '%d'));
+
+    // Get content set definitions
+    $rows = $wpdb->get_results(
+        $wpdb->prepare(
+            "
+            SELECT
+                p.post_content,
+                t.term_id AS product_id
+            FROM {$wpdb->posts} p
+            JOIN {$wpdb->term_relationships} tr
+              ON tr.object_id = p.ID
+            JOIN {$wpdb->terms} t
+              ON t.term_id = tr.term_taxonomy_id
+            WHERE p.post_type = 'tvd_content_set'
+              AND t.term_id IN ($placeholders)
+            ",
+            ...$product_ids
+        ),
+        ARRAY_A
+    );
+
+    $product_courses = [];
+
+    foreach ($rows as $row) {
+        $product_id = (int) $row['product_id'];
+        $course_ids = apprentice_extract_course_ids($row['post_content']);
+
+        if (empty($course_ids)) {
+            $product_courses[$product_id] = [];
+            continue;
+        }
+
+        // Fetch course names
+        $course_placeholders = implode(',', array_fill(0, count($course_ids), '%d'));
+        $course_terms = $wpdb->get_results(
+            $wpdb->prepare(
+                "SELECT term_id, name FROM {$wpdb->terms} WHERE term_id IN ($course_placeholders)",
+                ...$course_ids
+            ),
+            ARRAY_A
+        );
+
+        $courses = [];
+        foreach ($course_terms as $term) {
+            $courses[] = [
+                'course_id' => (int) $term['term_id'],
+                'course_name' => $term['name'],
+            ];
+        }
+
+        $product_courses[$product_id] = $courses;
+    }
+
+    return $product_courses;
+}
+
+
+function parse_product_expiry(int $product_id, array $expiry_configs): array
 {
     if (!isset($expiry_configs[$product_id])) {
         return [
@@ -842,8 +913,9 @@ function evaluate_current_accesses(
         }
     }
 
-    // Fetch product names from terms table
+    // Fetch product names from terms table AND product→courses mapping
     $product_names = [];
+    $product_courses = [];
 
     if (!empty($product_access)) {
         $product_ids = array_keys($product_access);
@@ -860,22 +932,29 @@ function evaluate_current_accesses(
         foreach ($name_rows as $row) {
             $product_names[(int) $row['term_id']] = $row['name'];
         }
+
+        // Get product→courses mapping
+        $product_courses = get_product_courses_map($product_ids);
     }
 
-    // Build final access list
+    // Build final access list (course-level)
     $accesses = [];
 
     foreach ($product_access as $product_id => $order_info) {
-        // Determine base access status
+        $courses = $product_courses[$product_id] ?? [];
+
+        // Determine base access status from order
         if (!$order_info['is_active']) {
-            // Order is revoked
-            $accesses[] = [
-                'product_id' => $product_id,
-                'product_name' => $product_names[$product_id] ?? null,
-                'status' => 'revoked',
-                'expires_at' => null,
-                'expiry_details' => null,
-            ];
+            // Order is revoked - add all courses with revoked status
+            foreach ($courses as $course) {
+                $accesses[] = [
+                    'course_id' => $course['course_id'],
+                    'course_name' => $course['course_name'],
+                    'status' => 'revoked',
+                    'expires_at' => null,
+                    'expiry_details' => null,
+                ];
+            }
             continue;
         }
 
@@ -898,13 +977,16 @@ function evaluate_current_accesses(
             }
         }
 
-        $accesses[] = [
-            'product_id' => $product_id,
-            'product_name' => $product_names[$product_id] ?? null,
-            'status' => $access_status,
-            'expires_at' => $expires_at,
-            'expiry_details' => $resolved['expiry_details'],
-        ];
+        // Add each course with the access status
+        foreach ($courses as $course) {
+            $accesses[] = [
+                'course_id' => $course['course_id'],
+                'course_name' => $course['course_name'],
+                'status' => $access_status,
+                'expires_at' => $expires_at,
+                'expiry_details' => $resolved['expiry_details'],
+            ];
+        }
     }
 
     return $accesses;
