@@ -311,9 +311,8 @@ function get_accesses_by_time(WP_REST_Request $request): WP_Error | array
     ];
 }
 
-function apprentice_product_course_map()
+function apprentice_product_course_map(): array
 {
-
     global $wpdb;
 
     /**
