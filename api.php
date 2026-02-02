@@ -195,44 +195,20 @@ function get_accesses_by_user_ids(WP_REST_Request $request)
             }
         }
 
-        $accesses = [];
-
-        foreach ($history as $entry) {
-
-            $product_id = (int) $entry['product_id'];
-
-            $resolved = resolve_access_expiry(
-                $product_id,
-                $expiry_configs,
-                $expiry_map[$product_id] ?? null
-            );
-
-            $access_entry = [
-                'product_id' => $product_id,
-                'course_id'  => is_null($entry['course_id'])
-                    ? null
-                    : (int) $entry['course_id'],
-                'granted_at' => $entry['created'],
-                'expires_at' => $resolved['expires_at'],
-                'expiry_details' => $resolved['expiry_details'],
-                'source'     => $entry['source'],
-                'status'     => (int) $entry['status'],
-            ];
-
-            if ($resolved['validation_error'] !== null) {
-                $access_entry['validation_error'] = $resolved['validation_error'];
-            }
-
-            $accesses[] = $access_entry;
-        }
+        $events = transform_access_history_events(
+            rows: $history,
+            expiry_configs: $expiry_configs,
+            expiry_map: $expiry_map,
+            include_user_id: false
+        );
 
         $results[] = [
             'user_id'  => $user_id,
             'status'   => 'found',
             'email'    => $user->user_email,
             'roles'    => array_values($user->roles),
-            'event_count' => count($accesses),
-            'events' => $accesses,
+            'event_count' => count($events),
+            'events' => $events,
         ];
     }
 
@@ -310,35 +286,12 @@ function get_accesses_by_time(WP_REST_Request $request)
         }
     }
 
-    $events = array_map(function ($row) use ($expiry_configs, $user_product_map) {
-        $product_id = (int) $row['product_id'];
-        $user_id = (int) $row['user_id'];
-        $key = $user_id . '_' . $product_id;
-
-        $resolved = resolve_access_expiry(
-            $product_id,
-            $expiry_configs,
-            $user_product_map[$key] ?? null,
-            $user_id
-        );
-
-        $event = [
-            'user_id'    => $user_id,
-            'product_id' => $product_id,
-            'course_id'  => (int) $row['course_id'],
-            'status'     => (int) $row['status'],
-            'source'     => $row['source'],
-            'created_at' => $row['created'],
-            'expires_at' => $resolved['expires_at'],
-            'expiry_details' => $resolved['expiry_details'],
-        ];
-
-        if ($resolved['validation_error'] !== null) {
-            $event['validation_error'] = $resolved['validation_error'];
-        }
-
-        return $event;
-    }, $rows);
+    $events = transform_access_history_events(
+        rows: $rows,
+        expiry_configs: $expiry_configs,
+        expiry_map: $user_product_map,
+        include_user_id: true,
+    );
 
     return [
         'since' => $since,
@@ -728,4 +681,92 @@ function resolve_access_expiry($product_id, $expiry_configs, $usermeta_expiry, $
         'expiry_details' => $expiry_info,
         'validation_error' => $validation_error,
     ];
+}
+
+/**
+ * Transform a tva_access_history row into standardized output format
+ *
+ * @param array $row The database row from tva_access_history
+ * @param array $expiry_configs Termmeta expiry configurations
+ * @param mixed $usermeta_expiry The usermeta expiry value for this product
+ * @param int|null $user_id Optional user ID for validation messages
+ * @param bool $include_user_id Whether to include user_id in the output
+ * @return array Transformed access/event data
+ */
+function transform_access_history_row(
+    array $row,
+    array $expiry_configs,
+    mixed $usermeta_expiry,
+    ?int $user_id = null,
+    bool $include_user_id = false
+): array {
+    $product_id = (int) $row['product_id'];
+
+    $resolved = resolve_access_expiry(
+        $product_id,
+        $expiry_configs,
+        $usermeta_expiry,
+        $user_id
+    );
+
+    // Handle course_id: null if null, otherwise cast to int
+    $course_id = is_null($row['course_id']) ? null : (int) $row['course_id'];
+
+    $result = [
+        'product_id' => $product_id,
+        'course_id'  => $course_id,
+        'created_at' => $row['created'],
+        'expires_at' => $resolved['expires_at'],
+        'expiry_details' => $resolved['expiry_details'],
+        'source'     => $row['source'],
+        'status'     => (int) $row['status'],
+    ];
+
+    // Conditionally add user_id (for /accesses/since)
+    if ($include_user_id && $user_id !== null) {
+        $result = ['user_id' => $user_id] + $result;
+    }
+
+    // Add validation error if present
+    if ($resolved['validation_error'] !== null) {
+        $result['validation_error'] = $resolved['validation_error'];
+    }
+
+    return $result;
+}
+
+/**
+ * Transform multiple tva_access_history rows into standardized output format
+ *
+ * @param array $rows Array of database rows from tva_access_history
+ * @param array $expiry_configs Termmeta expiry configurations
+ * @param array $expiry_map Map of expiry values (product_id => value OR user_id_product_id => value)
+ * @param bool $include_user_id Whether to include user_id in the output
+ * @return array Transformed access/event data array
+ */
+function transform_access_history_events($rows, $expiry_configs, $expiry_map, $include_user_id = false)
+{
+    $results = [];
+
+    foreach ($rows as $row) {
+        $product_id = (int) $row['product_id'];
+        $user_id = isset($row['user_id']) ? (int) $row['user_id'] : null;
+
+        // Build lookup key based on whether we have user context
+        if ($include_user_id && $user_id !== null) {
+            $expiry_key = $user_id . '_' . $product_id;
+        } else {
+            $expiry_key = $product_id;
+        }
+
+        $results[] = transform_access_history_row(
+            $row,
+            $expiry_configs,
+            $expiry_map[$expiry_key] ?? null,
+            $user_id,
+            $include_user_id
+        );
+    }
+
+    return $results;
 }
