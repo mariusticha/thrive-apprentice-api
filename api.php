@@ -205,7 +205,7 @@ function get_accesses_by_user_ids(WP_REST_Request $request): WP_Error | array
         );
 
         // Evaluate current access state
-        $accesses = evaluate_current_accesses(
+        $access_data = evaluate_current_accesses(
             $user_id,
             $expiry_configs,
             $expiry_map
@@ -216,8 +216,10 @@ function get_accesses_by_user_ids(WP_REST_Request $request): WP_Error | array
             'status'   => 'found',
             'email'    => $user->user_email,
             'roles'    => array_values($user->roles),
-            'access_count' => count($accesses),
-            'accesses' => $accesses,
+            'access_count' => count($access_data['accesses']),
+            'accesses' => $access_data['accesses'],
+            'outdated_accesses_count' => count($access_data['outdated_accesses']),
+            'outdated_accesses' => $access_data['outdated_accesses'],
             'event_count' => count($events),
             'events' => $events,
         ];
@@ -937,22 +939,22 @@ function evaluate_current_accesses(
         $product_courses = get_product_courses_map($product_ids);
     }
 
-    // Build final access list (course-level)
-    $accesses = [];
+    // Build final access lists (course-level) - separate active from outdated
+    $active_accesses = [];
+    $outdated_accesses = [];
 
     foreach ($product_access as $product_id => $order_info) {
         $courses = $product_courses[$product_id] ?? [];
 
         // Determine base access status from order
         if (!$order_info['is_active']) {
-            // Order is revoked - add all courses with revoked status
+            // Order is revoked - add all courses to outdated list
             foreach ($courses as $course) {
-                $accesses[] = [
+                $outdated_accesses[] = [
                     'course_id' => $course['course_id'],
                     'course_name' => $course['course_name'],
                     'status' => 'revoked',
                     'expires_at' => null,
-                    'expiry_details' => null,
                 ];
             }
             continue;
@@ -977,17 +979,25 @@ function evaluate_current_accesses(
             }
         }
 
-        // Add each course with the access status
+        // Add each course to appropriate list based on status
         foreach ($courses as $course) {
-            $accesses[] = [
+            $course_access = [
                 'course_id' => $course['course_id'],
                 'course_name' => $course['course_name'],
                 'status' => $access_status,
                 'expires_at' => $expires_at,
-                'expiry_details' => $resolved['expiry_details'],
             ];
+
+            if ($access_status === 'active') {
+                $active_accesses[] = $course_access;
+            } else {
+                $outdated_accesses[] = $course_access;
+            }
         }
     }
 
-    return $accesses;
+    return [
+        'accesses' => $active_accesses,
+        'outdated_accesses' => $outdated_accesses,
+    ];
 }
