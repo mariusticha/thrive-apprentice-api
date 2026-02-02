@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 /**
  * Plugin Name: Thrive Apprentice API
  * Description: Exposes Thrive Apprentice access history and state per user.
@@ -16,7 +18,7 @@ if (! defined('ABSPATH')) {
  *  /accesses
  *  /accesses/since
  */
-add_action('rest_api_init', function () {
+add_action('rest_api_init', function (): void {
 
     register_rest_route(
         'apprentice/v1',
@@ -42,7 +44,7 @@ add_action('rest_api_init', function () {
         [
             'methods'             => 'POST',
             'callback'            => 'get_accesses_by_time',
-            'permission_callback' => function () {
+            'permission_callback' => function (): bool {
                 return current_user_can('list_users');
             },
             'args' => [
@@ -62,7 +64,7 @@ add_action('rest_api_init', function () {
 /**
  *  /product-course-map
  */
-add_action('rest_api_init', function () {
+add_action('rest_api_init', function (): void {
 
     register_rest_route(
         'apprentice/v1',
@@ -70,7 +72,7 @@ add_action('rest_api_init', function () {
         [
             'methods'             => 'GET',
             'callback'            => 'apprentice_product_course_map',
-            'permission_callback' => function () {
+            'permission_callback' => function (): bool {
                 return current_user_can('list_users');
             },
         ]
@@ -80,7 +82,7 @@ add_action('rest_api_init', function () {
 
 /* - - -  F U N C T I O N S  - - - */
 
-function get_accesses_by_user_ids(WP_REST_Request $request)
+function get_accesses_by_user_ids(WP_REST_Request $request): WP_Error | array
 {
     global $wpdb;
 
@@ -202,11 +204,19 @@ function get_accesses_by_user_ids(WP_REST_Request $request)
             include_user_id: false
         );
 
+        // Evaluate current access state
+        $accesses = evaluate_current_accesses(
+            $user_id,
+            $expiry_configs,
+            $expiry_map
+        );
+
         $results[] = [
             'user_id'  => $user_id,
             'status'   => 'found',
             'email'    => $user->user_email,
             'roles'    => array_values($user->roles),
+            'accesses' => $accesses,
             'event_count' => count($events),
             'events' => $events,
         ];
@@ -215,7 +225,7 @@ function get_accesses_by_user_ids(WP_REST_Request $request)
     return $results;
 }
 
-function get_accesses_by_time(WP_REST_Request $request)
+function get_accesses_by_time(WP_REST_Request $request): WP_Error | array
 {
     global $wpdb;
 
@@ -654,8 +664,12 @@ function parse_product_expiry($product_id, $expiry_configs)
  * @param int|null $user_id Optional user ID for error messages
  * @return array ['expires_at' => string|null, 'expiry_details' => array, 'validation_error' => string|null]
  */
-function resolve_access_expiry($product_id, $expiry_configs, $usermeta_expiry, $user_id = null)
-{
+function resolve_access_expiry(
+    int $product_id,
+    array $expiry_configs,
+    $usermeta_expiry,
+    ?int $user_id = null,
+): array {
     $expiry_info = parse_product_expiry($product_id, $expiry_configs);
 
     $expires_at = null;
@@ -744,8 +758,12 @@ function transform_access_history_row(
  * @param bool $include_user_id Whether to include user_id in the output
  * @return array Transformed access/event data array
  */
-function transform_access_history_events($rows, $expiry_configs, $expiry_map, $include_user_id = false)
-{
+function transform_access_history_events(
+    array $rows,
+    array $expiry_configs,
+    array $expiry_map,
+    bool $include_user_id = false
+): array {
     $results = [];
 
     foreach ($rows as $row) {
@@ -769,4 +787,103 @@ function transform_access_history_events($rows, $expiry_configs, $expiry_map, $i
     }
 
     return $results;
+}
+
+/**
+ * Evaluate current access state for a user based on orders and expiry
+ *
+ * @param int $user_id The user ID
+ * @param array $expiry_configs Termmeta expiry configurations
+ * @param array $expiry_map User's expiry dates map (product_id => date)
+ * @return array Current access state per product
+ */
+function evaluate_current_accesses(
+    int $user_id,
+    array $expiry_configs,
+    array $expiry_map,
+): array {
+    global $wpdb;
+
+    // Query orders and order items for the user
+    $order_items = $wpdb->get_results(
+        $wpdb->prepare(
+            "
+            SELECT
+                oi.product_id,
+                o.status AS order_status,
+                oi.status AS item_status
+            FROM {$wpdb->prefix}tva_orders o
+            JOIN {$wpdb->prefix}tva_order_items oi ON oi.order_id = o.ID
+            WHERE o.user_id = %d
+            ",
+            $user_id
+        ),
+        ARRAY_A
+    );
+
+    // Group by product_id to handle multiple orders for same product
+    $product_access = [];
+
+    foreach ($order_items as $item) {
+        $product_id = (int) $item['product_id'];
+        $order_status = (int) $item['order_status'];
+        $item_status = (int) $item['item_status'];
+
+        // Check if order is active (both status = 1)
+        $is_active = ($order_status === 1 && $item_status === 1);
+
+        // If we haven't seen this product yet, or if we found an active order
+        if (!isset($product_access[$product_id]) || $is_active) {
+            $product_access[$product_id] = [
+                'is_active' => $is_active,
+                'order_status' => $order_status,
+                'item_status' => $item_status,
+            ];
+        }
+    }
+
+    // Build final access list
+    $accesses = [];
+
+    foreach ($product_access as $product_id => $order_info) {
+        // Determine base access status
+        if (!$order_info['is_active']) {
+            // Order is revoked
+            $accesses[] = [
+                'product_id' => $product_id,
+                'status' => 'revoked',
+                'expires_at' => null,
+                'expiry_details' => null,
+            ];
+            continue;
+        }
+
+        // Order is active, check expiry
+        $resolved = resolve_access_expiry(
+            $product_id,
+            $expiry_configs,
+            $expiry_map[$product_id] ?? null,
+            $user_id
+        );
+
+        // Determine if expired
+        $access_status = 'active';
+        $expires_at = $resolved['expires_at'];
+
+        if ($expires_at !== null) {
+            $now = current_time('mysql');
+            if ($expires_at < $now) {
+                $access_status = 'expired';
+            }
+        }
+
+        $accesses[] = [
+            'product_id' => $product_id,
+            'status' => $access_status,
+            'expires_at' => $expires_at,
+            'expiry_details' => $resolved['expiry_details'],
+        ];
+    }
+
+    return $accesses;
 }
