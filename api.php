@@ -231,7 +231,8 @@ function get_accesses_by_user_ids(WP_REST_Request $request)
             'status'   => 'found',
             'email'    => $user->user_email,
             'roles'    => array_values($user->roles),
-            'accesses' => $accesses,
+            'event_count' => count($accesses),
+            'events' => $accesses,
         ];
     }
 
@@ -342,6 +343,7 @@ function get_accesses_by_time(WP_REST_Request $request)
     return [
         'since' => $since,
         'until' => $until,
+        'event_count' => count($events),
         'events' => $events,
     ];
 }
