@@ -216,6 +216,7 @@ function get_accesses_by_user_ids(WP_REST_Request $request): WP_Error | array
             'status'   => 'found',
             'email'    => $user->user_email,
             'roles'    => array_values($user->roles),
+            'access_count' => count($accesses),
             'accesses' => $accesses,
             'event_count' => count($events),
             'events' => $events,
@@ -841,6 +842,26 @@ function evaluate_current_accesses(
         }
     }
 
+    // Fetch product names from terms table
+    $product_names = [];
+
+    if (!empty($product_access)) {
+        $product_ids = array_keys($product_access);
+        $placeholders = implode(',', array_fill(0, count($product_ids), '%d'));
+
+        $name_rows = $wpdb->get_results(
+            $wpdb->prepare(
+                "SELECT term_id, name FROM {$wpdb->terms} WHERE term_id IN ($placeholders)",
+                ...$product_ids
+            ),
+            ARRAY_A
+        );
+
+        foreach ($name_rows as $row) {
+            $product_names[(int) $row['term_id']] = $row['name'];
+        }
+    }
+
     // Build final access list
     $accesses = [];
 
@@ -850,6 +871,7 @@ function evaluate_current_accesses(
             // Order is revoked
             $accesses[] = [
                 'product_id' => $product_id,
+                'product_name' => $product_names[$product_id] ?? null,
                 'status' => 'revoked',
                 'expires_at' => null,
                 'expiry_details' => null,
@@ -878,6 +900,7 @@ function evaluate_current_accesses(
 
         $accesses[] = [
             'product_id' => $product_id,
+            'product_name' => $product_names[$product_id] ?? null,
             'status' => $access_status,
             'expires_at' => $expires_at,
             'expiry_details' => $resolved['expiry_details'],
