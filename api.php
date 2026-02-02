@@ -209,7 +209,9 @@ function get_accesses_by_user_ids(WP_REST_Request $request)
 
             $access_entry = [
                 'product_id' => $product_id,
-                'course_id'  => (int) $entry['course_id'],
+                'course_id'  => is_null($entry['course_id'])
+                    ? null
+                    : (int) $entry['course_id'],
                 'granted_at' => $entry['created'],
                 'expires_at' => $resolved['expires_at'],
                 'expiry_details' => $resolved['expiry_details'],
