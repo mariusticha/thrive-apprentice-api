@@ -249,6 +249,12 @@ function get_accesses_by_time(WP_REST_Request $request): WP_Error | array
 
     $include_revocations = $params['include_revocations'];
 
+    return [
+        'include_revocations' => $include_revocations,
+        'include_revocations_json' => json_encode($include_revocations),
+        'include_revocations_type' => gettype($include_revocations),
+    ];
+
     // Query NEW orders created in the timeframe (status=1 for active grants)
     $new_orders = $wpdb->get_results(
         $wpdb->prepare(
