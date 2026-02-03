@@ -396,7 +396,7 @@ function get_accesses_by_time(WP_REST_Request $request): WP_Error | array
     }
 
     // Format revoked orders list (minimal)
-    $all_revoked_orders = array_map(function($order) {
+    $all_revoked_orders = array_map(function ($order) {
         return [
             'order_id' => (int) $order['order_id'],
             'status' => (int) $order['status'],
@@ -513,10 +513,10 @@ function apprentice_product_course_map(): array
         }
 
         $products[] = [
-            'product_id'   => $product_id,
-            'product_name' => $product_name,
-            'courses'      => $courses,
-            'expiry'       => parse_product_expiry($product_id, $expiry_configs),
+            'product_id'        => $product_id,
+            'product_name'      => $product_name,
+            'courses'           => $courses,
+            'expiry_details'    => parse_product_expiry($product_id, $expiry_configs),
         ];
     }
 
