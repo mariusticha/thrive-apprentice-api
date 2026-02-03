@@ -953,12 +953,12 @@ function evaluate_current_accesses(
             foreach ($courses as $course) {
                 $outdated_accesses[] = [
                     'order_id' => $order_id,
-                    'order_created_at' => $order_created_at,
                     'product_id' => $product_id,
                     'product_name' => $product_name,
                     'course_id' => $course['course_id'],
                     'course_name' => $course['course_name'],
                     'status' => 'revoked',
+                    'order_created_at' => $order_created_at,
                     'expires_at' => $resolved['expires_at'],
                     'expiry_details' => $resolved['expiry_details'],
                 ];
@@ -981,12 +981,12 @@ function evaluate_current_accesses(
         foreach ($courses as $course) {
             $course_access = [
                 'order_id' => $order_id,
-                'order_created_at' => $order_created_at,
                 'product_id' => $product_id,
                 'product_name' => $product_name,
                 'course_id' => $course['course_id'],
                 'course_name' => $course['course_name'],
                 'status' => $access_status,
+                'order_created_at' => $order_created_at,
                 'expires_at' => $expires_at,
                 'expiry_details' => $resolved['expiry_details'],
             ];
