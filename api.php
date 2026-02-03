@@ -56,6 +56,11 @@ add_action('rest_api_init', function (): void {
                     'required' => false,
                     'type'     => 'string',
                 ],
+                'include_revocations' => [
+                    'required' => false,
+                    'type'     => 'boolean',
+                    'default'  => true,
+                ],
             ],
         ]
     );
@@ -242,6 +247,8 @@ function get_accesses_by_time(WP_REST_Request $request): WP_Error | array
 
     [$since, $until] = $parsed_params;
 
+    $include_revocations = $params['include_revocations'];
+
     // Query NEW orders created in the timeframe (status=1 for active grants)
     $new_orders = $wpdb->get_results(
         $wpdb->prepare(
@@ -266,19 +273,23 @@ function get_accesses_by_time(WP_REST_Request $request): WP_Error | array
         ARRAY_A
     );
 
-    // Query ALL revoked orders (for comparison by client)
-    $revoked_orders = $wpdb->get_results(
-        "
-        SELECT
-            o.ID AS order_id,
-            o.status,
-            o.created_at
-        FROM {$wpdb->prefix}tva_orders o
-        WHERE o.status = 4
-        ORDER BY o.created_at ASC
-        ",
-        ARRAY_A
-    );
+    // Query ALL revoked orders (for comparison by client) - only if requested
+    $revoked_orders = [];
+
+    if ($include_revocations) {
+        $revoked_orders = $wpdb->get_results(
+            "
+            SELECT
+                o.ID AS order_id,
+                o.status,
+                o.created_at
+            FROM {$wpdb->prefix}tva_orders o
+            WHERE o.status = 4
+            ORDER BY o.created_at ASC
+            ",
+            ARRAY_A
+        );
+    }
 
     // Get unique product IDs from new orders for batch queries
     $product_ids = array_unique(array_column($new_orders, 'product_id'));
@@ -410,8 +421,10 @@ function get_accesses_by_time(WP_REST_Request $request): WP_Error | array
         'until' => $until,
         'new_grants_count' => count($new_grants),
         'new_grants' => $new_grants,
-        'total_revocations_count' => count($total_revocations),
-        'total_revocations' => $total_revocations,
+        ...$include_revocations ? [
+            'total_revocations_count' => count($total_revocations),
+            'total_revocations' => $total_revocations,
+        ] : [],
     ];
 }
 
