@@ -868,7 +868,7 @@ function transform_access_history_events(
  * @param int $user_id The user ID
  * @param array $expiry_configs Termmeta expiry configurations
  * @param array $expiry_map User's expiry dates map (product_id => date)
- * @return array Current access state per product
+ * @return array Current access state per order-product-course combination
  */
 function evaluate_current_accesses(
     int $user_id,
@@ -877,11 +877,12 @@ function evaluate_current_accesses(
 ): array {
     global $wpdb;
 
-    // Query orders and order items for the user
+    // Query orders and order items for the user (keep ALL orders separately)
     $order_items = $wpdb->get_results(
         $wpdb->prepare(
             "
             SELECT
+                o.ID AS order_id,
                 oi.product_id,
                 o.status AS order_status,
                 oi.status AS item_status
@@ -894,35 +895,14 @@ function evaluate_current_accesses(
         ARRAY_A
     );
 
-    // Group by product_id to handle multiple orders for same product
-    $product_access = [];
+    // Get all unique product IDs for batch queries
+    $product_ids = array_unique(array_column($order_items, 'product_id'));
 
-    foreach ($order_items as $item) {
-        $product_id = (int) $item['product_id'];
-        $order_status = (int) $item['order_status'];
-        $item_status = (int) $item['item_status'];
-
-        // Check if order is active (both status = 1)
-        $is_active = ($order_status === 1 && $item_status === 1);
-
-        // If we haven't seen this product yet, or if we found an active order
-        if (!isset($product_access[$product_id]) || $is_active) {
-            $product_access[$product_id] = [
-                'is_active' => $is_active,
-                'order_status' => $order_status,
-                'item_status' => $item_status,
-            ];
-        }
-    }
-
-    // Fetch product names from terms table AND product→courses mapping
+    // Fetch product names from terms table
     $product_names = [];
-    $product_courses = [];
 
-    if (!empty($product_access)) {
-        $product_ids = array_keys($product_access);
+    if (!empty($product_ids)) {
         $placeholders = implode(',', array_fill(0, count($product_ids), '%d'));
-
         $name_rows = $wpdb->get_results(
             $wpdb->prepare(
                 "SELECT term_id, name FROM {$wpdb->terms} WHERE term_id IN ($placeholders)",
@@ -934,27 +914,41 @@ function evaluate_current_accesses(
         foreach ($name_rows as $row) {
             $product_names[(int) $row['term_id']] = $row['name'];
         }
-
-        // Get product→courses mapping
-        $product_courses = get_product_courses_map($product_ids);
     }
 
+    // Get product→courses mapping
+    $product_courses = get_product_courses_map($product_ids);
+
     // Build final access lists (course-level) - separate active from outdated
+    // Process EACH order item separately (no deduplication)
     $active_accesses = [];
     $outdated_accesses = [];
 
-    foreach ($product_access as $product_id => $order_info) {
+    foreach ($order_items as $item) {
+        $order_id = (int) $item['order_id'];
+        $product_id = (int) $item['product_id'];
+        $order_status = (int) $item['order_status'];
+        $item_status = (int) $item['item_status'];
+
+        $product_name = $product_names[$product_id] ?? null;
         $courses = $product_courses[$product_id] ?? [];
 
+        // Check if order is active (both status = 1)
+        $is_active = ($order_status === 1 && $item_status === 1);
+
         // Determine base access status from order
-        if (!$order_info['is_active']) {
+        if (!$is_active) {
             // Order is revoked - add all courses to outdated list
             foreach ($courses as $course) {
                 $outdated_accesses[] = [
+                    'order_id' => $order_id,
+                    'product_id' => $product_id,
+                    'product_name' => $product_name,
                     'course_id' => $course['course_id'],
                     'course_name' => $course['course_name'],
                     'status' => 'revoked',
                     'expires_at' => null,
+                    'expiry_details' => null,
                 ];
             }
             continue;
@@ -982,10 +976,14 @@ function evaluate_current_accesses(
         // Add each course to appropriate list based on status
         foreach ($courses as $course) {
             $course_access = [
+                'order_id' => $order_id,
+                'product_id' => $product_id,
+                'product_name' => $product_name,
                 'course_id' => $course['course_id'],
                 'course_name' => $course['course_name'],
                 'status' => $access_status,
                 'expires_at' => $expires_at,
+                'expiry_details' => $resolved['expiry_details'],
             ];
 
             if ($access_status === 'active') {
@@ -999,5 +997,6 @@ function evaluate_current_accesses(
     return [
         'accesses' => $active_accesses,
         'outdated_accesses' => $outdated_accesses,
+        'outdated_accesses_count' => count($outdated_accesses),
     ];
 }
