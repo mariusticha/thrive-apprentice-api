@@ -396,10 +396,10 @@ function get_accesses_by_time(WP_REST_Request $request): WP_Error | array
     }
 
     // Format revoked orders list (minimal)
-    $all_revoked_orders = [];
+    $total_revocations = [];
 
     foreach ($revoked_orders as $order) {
-        $all_revoked_orders[] = [
+        $total_revocations[] = [
             'id' => (int) $order['order_id'],
             'created_at' => $order['created_at'],
         ];
@@ -410,8 +410,8 @@ function get_accesses_by_time(WP_REST_Request $request): WP_Error | array
         'until' => $until,
         'new_grants_count' => count($new_grants),
         'new_grants' => $new_grants,
-        'all_revoked_orders_count' => count($all_revoked_orders),
-        'all_revoked_orders' => $all_revoked_orders,
+        'total_revocations_count' => count($total_revocations),
+        'total_revocations' => $total_revocations,
     ];
 }
 
