@@ -396,13 +396,14 @@ function get_accesses_by_time(WP_REST_Request $request): WP_Error | array
     }
 
     // Format revoked orders list (minimal)
-    $all_revoked_orders = array_map(function ($order) {
-        return [
-            'order_id' => (int) $order['order_id'],
-            'status' => (int) $order['status'],
+    $all_revoked_orders = [];
+
+    foreach ($revoked_orders as $order) {
+        $all_revoked_orders[] = [
+            'id' => (int) $order['order_id'],
             'created_at' => $order['created_at'],
         ];
-    }, $revoked_orders);
+    }
 
     return [
         'since' => $since,
