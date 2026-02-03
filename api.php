@@ -883,6 +883,7 @@ function evaluate_current_accesses(
             "
             SELECT
                 o.ID AS order_id,
+                o.created_at AS order_created_at,
                 oi.product_id,
                 o.status AS order_status,
                 oi.status AS item_status
@@ -926,6 +927,7 @@ function evaluate_current_accesses(
 
     foreach ($order_items as $item) {
         $order_id = (int) $item['order_id'];
+        $order_created_at = $item['order_created_at'];
         $product_id = (int) $item['product_id'];
         $order_status = (int) $item['order_status'];
         $item_status = (int) $item['item_status'];
@@ -936,25 +938,7 @@ function evaluate_current_accesses(
         // Check if order is active (both status = 1)
         $is_active = ($order_status === 1 && $item_status === 1);
 
-        // Determine base access status from order
-        if (!$is_active) {
-            // Order is revoked - add all courses to outdated list
-            foreach ($courses as $course) {
-                $outdated_accesses[] = [
-                    'order_id' => $order_id,
-                    'product_id' => $product_id,
-                    'product_name' => $product_name,
-                    'course_id' => $course['course_id'],
-                    'course_name' => $course['course_name'],
-                    'status' => 'revoked',
-                    'expires_at' => null,
-                    'expiry_details' => null,
-                ];
-            }
-            continue;
-        }
-
-        // Order is active, check expiry
+        // Always resolve expiry info (even for revoked orders, to show what would have been)
         $resolved = resolve_access_expiry(
             $product_id,
             $expiry_configs,
@@ -962,7 +946,27 @@ function evaluate_current_accesses(
             $user_id
         );
 
-        // Determine if expired
+        // Determine base access status from order
+        if (!$is_active) {
+            // Order is revoked - add all courses to outdated list
+            // Show what the expiry would have been
+            foreach ($courses as $course) {
+                $outdated_accesses[] = [
+                    'order_id' => $order_id,
+                    'order_created_at' => $order_created_at,
+                    'product_id' => $product_id,
+                    'product_name' => $product_name,
+                    'course_id' => $course['course_id'],
+                    'course_name' => $course['course_name'],
+                    'status' => 'revoked',
+                    'expires_at' => $resolved['expires_at'],
+                    'expiry_details' => $resolved['expiry_details'],
+                ];
+            }
+            continue;
+        }
+
+        // Order is active, check expiry
         $access_status = 'active';
         $expires_at = $resolved['expires_at'];
 
@@ -977,6 +981,7 @@ function evaluate_current_accesses(
         foreach ($courses as $course) {
             $course_access = [
                 'order_id' => $order_id,
+                'order_created_at' => $order_created_at,
                 'product_id' => $product_id,
                 'product_name' => $product_name,
                 'course_id' => $course['course_id'],
