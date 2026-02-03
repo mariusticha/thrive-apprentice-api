@@ -242,27 +242,56 @@ function get_accesses_by_time(WP_REST_Request $request): WP_Error | array
 
     [$since, $until] = $parsed_params;
 
-    $table = $wpdb->prefix . 'tva_access_history';
-
-    $rows = $wpdb->get_results(
+    // Query NEW orders created in the timeframe (status=1 for active grants)
+    $new_orders = $wpdb->get_results(
         $wpdb->prepare(
-            "SELECT * FROM {$table} WHERE created >= \"%s\" AND created <= \"%s\" ORDER BY created ASC",
+            "
+            SELECT
+                o.ID AS order_id,
+                o.user_id,
+                o.created_at AS order_created_at,
+                oi.product_id,
+                o.status AS order_status,
+                oi.status AS item_status
+            FROM {$wpdb->prefix}tva_orders o
+            JOIN {$wpdb->prefix}tva_order_items oi ON oi.order_id = o.ID
+            WHERE o.created_at >= %s AND o.created_at <= %s
+              AND o.status = 1
+              AND oi.status = 1
+            ORDER BY o.created_at ASC
+            ",
             $since,
             $until
         ),
         ARRAY_A
     );
 
-    // BATCH FETCH TERMMETA EXPIRY CONFIGS FOR ALL PRODUCTS!
-    $unique_product_ids = array_unique(array_column($rows, 'product_id'));
+    // Query ALL revoked orders (for comparison by client)
+    $revoked_orders = $wpdb->get_results(
+        "
+        SELECT
+            o.ID AS order_id,
+            o.status,
+            o.created_at
+        FROM {$wpdb->prefix}tva_orders o
+        WHERE o.status = 4
+        ORDER BY o.created_at ASC
+        ",
+        ARRAY_A
+    );
+
+    // Get unique product IDs from new orders for batch queries
+    $product_ids = array_unique(array_column($new_orders, 'product_id'));
+
+    // Batch fetch expiry configs
     $expiry_configs = [];
 
-    if (!empty($unique_product_ids)) {
-        $placeholders = implode(',', array_fill(0, count($unique_product_ids), '%d'));
+    if (!empty($product_ids)) {
+        $placeholders = implode(',', array_fill(0, count($product_ids), '%d'));
         $expiry_rows = $wpdb->get_results(
             $wpdb->prepare(
                 "SELECT term_id, meta_value FROM {$wpdb->termmeta} WHERE term_id IN ($placeholders) AND meta_key = 'access_expiry'",
-                ...$unique_product_ids
+                ...$product_ids
             ),
             ARRAY_A
         );
@@ -272,15 +301,13 @@ function get_accesses_by_time(WP_REST_Request $request): WP_Error | array
         }
     }
 
-    // BATCH FETCH USERMETA EXPIRY DATES FOR ALL USER+PRODUCT COMBOS!
+    // Batch fetch usermeta expiry dates for all users+products in new orders
     $user_product_map = [];
 
-    if (!empty($rows)) {
-        // Build list of unique user_id + product_id pairs
-        $user_ids = array_unique(array_column($rows, 'user_id'));
-
-        // Fetch all expiry dates for these users
+    if (!empty($new_orders)) {
+        $user_ids = array_unique(array_column($new_orders, 'user_id'));
         $placeholders = implode(',', array_fill(0, count($user_ids), '%d'));
+
         $expiry_dates = $wpdb->get_results(
             $wpdb->prepare(
                 "SELECT user_id, meta_key, meta_value FROM {$wpdb->usermeta} WHERE user_id IN ($placeholders) AND meta_key LIKE 'tva_product%%_access_expiry'",
@@ -299,18 +326,91 @@ function get_accesses_by_time(WP_REST_Request $request): WP_Error | array
         }
     }
 
-    $events = transform_access_history_events(
-        rows: $rows,
-        expiry_configs: $expiry_configs,
-        expiry_map: $user_product_map,
-        include_user_id: true,
-    );
+    // Batch fetch product names
+    $product_names = [];
+
+    if (!empty($product_ids)) {
+        $placeholders = implode(',', array_fill(0, count($product_ids), '%d'));
+        $name_rows = $wpdb->get_results(
+            $wpdb->prepare(
+                "SELECT term_id, name FROM {$wpdb->terms} WHERE term_id IN ($placeholders)",
+                ...$product_ids
+            ),
+            ARRAY_A
+        );
+
+        foreach ($name_rows as $row) {
+            $product_names[(int) $row['term_id']] = $row['name'];
+        }
+    }
+
+    // Get product→courses mapping
+    $product_courses = get_product_courses_map($product_ids);
+
+    // Build new grants list with full details (same structure as /accesses)
+    $new_grants = [];
+
+    foreach ($new_orders as $order) {
+        $order_id = (int) $order['order_id'];
+        $user_id = (int) $order['user_id'];
+        $order_created_at = $order['order_created_at'];
+        $product_id = (int) $order['product_id'];
+
+        $product_name = $product_names[$product_id] ?? null;
+        $courses = $product_courses[$product_id] ?? [];
+
+        // Resolve expiry
+        $resolved = resolve_access_expiry(
+            $product_id,
+            $expiry_configs,
+            $user_product_map[$user_id . '_' . $product_id] ?? null,
+            $user_id
+        );
+
+        // Determine if expired
+        $access_status = 'active';
+        $expires_at = $resolved['expires_at'];
+
+        if ($expires_at !== null) {
+            $now = current_time('mysql');
+            if ($expires_at < $now) {
+                $access_status = 'expired';
+            }
+        }
+
+        // Add each course with full details
+        foreach ($courses as $course) {
+            $new_grants[] = [
+                'user_id' => $user_id,
+                'order_id' => $order_id,
+                'order_created_at' => $order_created_at,
+                'product_id' => $product_id,
+                'product_name' => $product_name,
+                'course_id' => $course['course_id'],
+                'course_name' => $course['course_name'],
+                'status' => $access_status,
+                'expires_at' => $expires_at,
+                'expiry_details' => $resolved['expiry_details'],
+            ];
+        }
+    }
+
+    // Format revoked orders list (minimal)
+    $all_revoked_orders = array_map(function($order) {
+        return [
+            'order_id' => (int) $order['order_id'],
+            'status' => (int) $order['status'],
+            'created_at' => $order['created_at'],
+        ];
+    }, $revoked_orders);
 
     return [
         'since' => $since,
         'until' => $until,
-        'event_count' => count($events),
-        'events' => $events,
+        'new_grants_count' => count($new_grants),
+        'new_grants' => $new_grants,
+        'all_revoked_orders_count' => count($all_revoked_orders),
+        'all_revoked_orders' => $all_revoked_orders,
     ];
 }
 
