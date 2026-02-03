@@ -57,9 +57,8 @@ add_action('rest_api_init', function (): void {
                     'type'     => 'string',
                 ],
                 'include_revocations' => [
-                    'required' => false,
+                    'required' => false,        // defaults: true
                     'type'     => 'boolean',
-                    'default'  => true,
                 ],
             ],
         ]
@@ -247,13 +246,7 @@ function get_accesses_by_time(WP_REST_Request $request): WP_Error | array
 
     [$since, $until] = $parsed_params;
 
-    $include_revocations = $params['include_revocations'];
-
-    return [
-        'include_revocations' => $include_revocations,
-        'include_revocations_json' => json_encode($include_revocations),
-        'include_revocations_type' => gettype($include_revocations),
-    ];
+    $include_revocations = $params['include_revocations'] ?? true;
 
     // Query NEW orders created in the timeframe (status=1 for active grants)
     $new_orders = $wpdb->get_results(
