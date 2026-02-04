@@ -284,6 +284,7 @@ function get_accesses_by_time(WP_REST_Request $request): WP_Error | array
                 o.created_at
             FROM {$wpdb->prefix}tva_orders o
             WHERE o.status = 4
+            AND o.user_id IN (SELECT ID FROM {$wpdb->prefix}users)
             ORDER BY o.created_at ASC
             ",
             ARRAY_A
