@@ -83,8 +83,139 @@ add_action('rest_api_init', function (): void {
     );
 });
 
+/**
+ *  /accesses/revoke
+ */
+add_action('rest_api_init', function (): void {
+
+    register_rest_route(
+        'apprentice/v1',
+        '/accesses/revoke',
+        [
+            'methods'             => 'POST',
+            'callback'            => 'revoke_user_accesses',
+            'permission_callback' => function (): bool {
+                return current_user_can('list_users');
+            },
+            'args' => [
+                'user_id' => [
+                    'required' => true,
+                    'type'     => 'integer',
+                ],
+                'product_ids' => [
+                    'required' => true,
+                    'type'     => 'array',
+                ],
+            ],
+        ]
+    );
+});
+
 
 /* - - -  F U N C T I O N S  - - - */
+
+function revoke_user_accesses(WP_REST_Request $request): WP_Error | array
+{
+    global $wpdb;
+
+    $params = $request->get_json_params();
+
+    // Validate user_id
+    $user_id = isset($params['user_id']) ? intval($params['user_id']) : 0;
+
+    if ($user_id === 0) {
+        return new WP_Error(
+            'invalid_user_id',
+            'user_id must be a non-zero integer',
+            ['status' => 400]
+        );
+    }
+
+    // Validate product_ids
+    $product_ids = $params['product_ids'] ?? null;
+
+    if (! is_array($product_ids) || empty($product_ids)) {
+        return new WP_Error(
+            'invalid_product_ids',
+            'product_ids must be a non-empty array',
+            ['status' => 400]
+        );
+    }
+
+    $product_ids = array_values(array_unique(array_map('intval', $product_ids)));
+
+    // Step A: Get all order IDs for this user
+    $all_order_ids = $wpdb->get_col(
+        $wpdb->prepare(
+            "SELECT ID FROM {$wpdb->prefix}tva_orders WHERE user_id = %d",
+            $user_id
+        )
+    );
+
+    if (empty($all_order_ids)) {
+        return [
+            'message'        => 'success',
+            'orders_updated' => 0,
+            'items_updated'  => 0,
+        ];
+    }
+
+    // Step B: Find order items matching BOTH the user's orders AND the requested product IDs
+    $order_placeholders   = implode(',', array_fill(0, count($all_order_ids), '%d'));
+    $product_placeholders = implode(',', array_fill(0, count($product_ids), '%d'));
+
+    $matched_items = $wpdb->get_results(
+        $wpdb->prepare(
+            "SELECT id AS item_id, order_id
+            FROM {$wpdb->prefix}tva_order_items
+            WHERE order_id IN ($order_placeholders)
+              AND product_id IN ($product_placeholders)",
+            ...[...$all_order_ids, ...$product_ids]
+        ),
+        ARRAY_A
+    );
+
+    if (empty($matched_items)) {
+        return [
+            'message'        => 'success',
+            'orders_updated' => 0,
+            'items_updated'  => 0,
+        ];
+    }
+
+    $matched_item_ids  = array_column($matched_items, 'item_id');
+    $matched_order_ids = array_values(array_unique(array_column($matched_items, 'order_id')));
+
+    // Step C: Batch update orders — only those confirmed to carry a requested product
+    $order_update_placeholders = implode(',', array_fill(0, count($matched_order_ids), '%d'));
+
+    $wpdb->query(
+        $wpdb->prepare(
+            "UPDATE {$wpdb->prefix}tva_orders SET status = 4 WHERE ID IN ($order_update_placeholders)",
+            ...$matched_order_ids
+        )
+    );
+
+    $orders_updated = $wpdb->rows_affected;
+
+    // Step D: Batch update order items
+    $item_update_placeholders = implode(',', array_fill(0, count($matched_item_ids), '%d'));
+
+    $wpdb->query(
+        $wpdb->prepare(
+            "UPDATE {$wpdb->prefix}tva_order_items SET status = 0 WHERE id IN ($item_update_placeholders)",
+            ...$matched_item_ids
+        )
+    );
+
+    $items_updated = $wpdb->rows_affected;
+
+    return [
+        'message'        => 'success',
+        'orders_updated' => $orders_updated,
+        'items_updated'  => $items_updated,
+    ];
+}
 
 function get_accesses_by_user_ids(WP_REST_Request $request): WP_Error | array
 {
