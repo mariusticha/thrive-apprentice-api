@@ -139,6 +139,34 @@ add_action('rest_api_init', function (): void {
     );
 });
 
+/**
+ *  /accesses/delete
+ */
+add_action('rest_api_init', function (): void {
+
+    register_rest_route(
+        'apprentice/v1',
+        '/accesses/delete',
+        [
+            'methods'             => 'DELETE',
+            'callback'            => 'delete_user_accesses',
+            'permission_callback' => function (): bool {
+                return current_user_can('list_users');
+            },
+            'args' => [
+                'user_id' => [
+                    'required' => true,
+                    'type'     => 'integer',
+                ],
+                'product_ids' => [
+                    'required' => true,
+                    'type'     => 'array',
+                ],
+            ],
+        ]
+    );
+});
+
 
 /* - - -  F U N C T I O N S  - - - */
 
@@ -286,20 +314,121 @@ function restore_user_accesses(WP_REST_Request $request): WP_Error | array
     ];
 }
 
+function delete_user_accesses(WP_REST_Request $request): WP_Error | array
+{
+    global $wpdb;
+
+    $params = $request->get_json_params();
+
+    // Validate user_id
+    $user_id = isset($params['user_id']) ? intval($params['user_id']) : 0;
+
+    if ($user_id === 0) {
+        return new WP_Error(
+            'invalid_user_id',
+            'user_id must be a non-zero integer',
+            ['status' => 400]
+        );
+    }
+
+    // Validate product_ids
+    $product_ids = $params['product_ids'] ?? null;
+
+    if (! is_array($product_ids) || empty($product_ids)) {
+        return new WP_Error(
+            'invalid_product_ids',
+            'product_ids must be a non-empty array',
+            ['status' => 400]
+        );
+    }
+
+    $product_ids = array_values(array_unique(array_map('intval', $product_ids)));
+
+    // Find all matching orders/items regardless of status
+    $matched = find_order_items_for_access_update($user_id, $product_ids);
+
+    $orders_deleted = 0;
+    $items_deleted  = 0;
+
+    if (! empty($matched['item_ids'])) {
+        // Delete items before orders (FK safety)
+        $item_placeholders = implode(',', array_fill(0, count($matched['item_ids']), '%d'));
+
+        $wpdb->query(
+            $wpdb->prepare(
+                "DELETE FROM {$wpdb->prefix}tva_order_items WHERE id IN ($item_placeholders)",
+                ...$matched['item_ids']
+            )
+        );
+
+        $items_deleted = $wpdb->rows_affected;
+
+        $order_placeholders = implode(',', array_fill(0, count($matched['order_ids']), '%d'));
+
+        $wpdb->query(
+            $wpdb->prepare(
+                "DELETE FROM {$wpdb->prefix}tva_orders WHERE ID IN ($order_placeholders)",
+                ...$matched['order_ids']
+            )
+        );
+
+        $orders_deleted = $wpdb->rows_affected;
+    }
+
+    // Delete access history entries for this user + product IDs
+    $product_placeholders = implode(',', array_fill(0, count($product_ids), '%d'));
+
+    $wpdb->query(
+        $wpdb->prepare(
+            "DELETE FROM {$wpdb->prefix}tva_access_history WHERE user_id = %d AND product_id IN ($product_placeholders)",
+            $user_id,
+            ...$product_ids
+        )
+    );
+
+    $history_deleted = $wpdb->rows_affected;
+
+    // Delete usermeta expiry entries for this user + product IDs
+    $meta_keys         = array_map(fn(int $id) => "tva_product_{$id}_access_expiry", $product_ids);
+    $meta_placeholders = implode(',', array_fill(0, count($meta_keys), '%s'));
+
+    $wpdb->query(
+        $wpdb->prepare(
+            "DELETE FROM {$wpdb->usermeta} WHERE user_id = %d AND meta_key IN ($meta_placeholders)",
+            $user_id,
+            ...$meta_keys
+        )
+    );
+
+    $usermeta_deleted = $wpdb->rows_affected;
+
+    return [
+        'message'          => 'success',
+        'orders_deleted'   => $orders_deleted,
+        'items_deleted'    => $items_deleted,
+        'history_deleted'  => $history_deleted,
+        'usermeta_deleted' => $usermeta_deleted,
+    ];
+}
+
 function find_order_items_for_access_update(
     int $user_id,
     array $product_ids,
-    int $order_status,
-    int $item_status,
+    ?int $order_status = null,
+    ?int $item_status = null,
 ): array {
     global $wpdb;
 
+    if ($order_status !== null) {
+        $order_sql  = "SELECT ID FROM {$wpdb->prefix}tva_orders WHERE user_id = %d AND status = %d";
+        $order_args = [$user_id, $order_status];
+    } else {
+        $order_sql  = "SELECT ID FROM {$wpdb->prefix}tva_orders WHERE user_id = %d";
+        $order_args = [$user_id];
+    }
+
     $all_order_ids = $wpdb->get_col(
-        $wpdb->prepare(
-            "SELECT ID FROM {$wpdb->prefix}tva_orders WHERE user_id = %d AND status = %d",
-            $user_id,
-            $order_status
-        )
+        $wpdb->prepare($order_sql, ...$order_args)
     );
 
     if (empty($all_order_ids)) {
@@ -309,15 +438,23 @@ function find_order_items_for_access_update(
     $order_placeholders   = implode(',', array_fill(0, count($all_order_ids), '%d'));
     $product_placeholders = implode(',', array_fill(0, count($product_ids), '%d'));
 
-    $matched_items = $wpdb->get_results(
-        $wpdb->prepare(
-            "SELECT id AS item_id, order_id
+    if ($item_status !== null) {
+        $items_sql  = "SELECT id AS item_id, order_id
             FROM {$wpdb->prefix}tva_order_items
             WHERE order_id IN ($order_placeholders)
               AND product_id IN ($product_placeholders)
-              AND status = %d",
-            ...[...$all_order_ids, ...$product_ids, $item_status]
-        ),
+              AND status = %d";
+        $items_args = [...$all_order_ids, ...$product_ids, $item_status];
+    } else {
+        $items_sql  = "SELECT id AS item_id, order_id
+            FROM {$wpdb->prefix}tva_order_items
+            WHERE order_id IN ($order_placeholders)
+              AND product_id IN ($product_placeholders)";
+        $items_args = [...$all_order_ids, ...$product_ids];
+    }
+
+    $matched_items = $wpdb->get_results(
+        $wpdb->prepare($items_sql, ...$items_args),
         ARRAY_A
     );
 
