@@ -140,6 +140,38 @@ add_action('rest_api_init', function (): void {
 });
 
 /**
+ *  /accesses/update
+ */
+add_action('rest_api_init', function (): void {
+
+    register_rest_route(
+        'apprentice/v1',
+        '/accesses/update',
+        [
+            'methods'             => 'PATCH',
+            'callback'            => 'update_user_access',
+            'permission_callback' => function (): bool {
+                return current_user_can('list_users');
+            },
+            'args' => [
+                'user_id' => [
+                    'required' => true,
+                    'type'     => 'integer',
+                ],
+                'product_id' => [
+                    'required' => true,
+                    'type'     => 'integer',
+                ],
+                'expires_at' => [
+                    'required' => true,
+                    'type'     => 'string',
+                ],
+            ],
+        ]
+    );
+});
+
+/**
  *  /accesses/delete
  */
 add_action('rest_api_init', function (): void {
@@ -408,6 +440,94 @@ function delete_user_accesses(WP_REST_Request $request): WP_Error | array
         'items_deleted'    => $items_deleted,
         'history_deleted'  => $history_deleted,
         'usermeta_deleted' => $usermeta_deleted,
+    ];
+}
+
+function update_user_access(WP_REST_Request $request): WP_Error | array
+{
+    global $wpdb;
+
+    $params = $request->get_json_params();
+
+    // Validate user_id
+    $user_id = isset($params['user_id']) ? intval($params['user_id']) : 0;
+
+    if ($user_id === 0) {
+        return new WP_Error(
+            'invalid_user_id',
+            'user_id must be a non-zero integer',
+            ['status' => 400]
+        );
+    }
+
+    // Validate product_id
+    $product_id = isset($params['product_id']) ? intval($params['product_id']) : 0;
+
+    if ($product_id === 0) {
+        return new WP_Error(
+            'invalid_product_id',
+            'product_id must be a non-zero integer',
+            ['status' => 400]
+        );
+    }
+
+    // Validate and normalize expires_at
+    $expires_at_raw = $params['expires_at'] ?? '';
+
+    if (empty($expires_at_raw)) {
+        return new WP_Error(
+            'invalid_expires_at',
+            "The 'expires_at' parameter is required.",
+            ['status' => 400]
+        );
+    }
+
+    $parsed = strtotime($expires_at_raw);
+
+    if ($parsed === false) {
+        return new WP_Error(
+            'invalid_expires_at',
+            "The 'expires_at' parameter must be a valid date or datetime string.",
+            ['status' => 400]
+        );
+    }
+
+    $expires_at = date('Y-m-d H:i:s', $parsed);
+
+    // Confirm orders exist for this user + product (any status)
+    $matched = find_order_items_for_access_update($user_id, [$product_id]);
+
+    if (empty($matched['item_ids'])) {
+        return [
+            'message'        => 'success',
+            'expiry_updated' => false,
+            'reason'         => 'no_orders_found',
+        ];
+    }
+
+    // Update the usermeta expiry row if it exists
+    $meta_key = "tva_product_{$product_id}_access_expiry";
+
+    $wpdb->query(
+        $wpdb->prepare(
+            "UPDATE {$wpdb->usermeta} SET meta_value = %s WHERE user_id = %d AND meta_key = %s",
+            $expires_at,
+            $user_id,
+            $meta_key
+        )
+    );
+
+    if ($wpdb->rows_affected > 0) {
+        return [
+            'message'        => 'success',
+            'expiry_updated' => true,
+        ];
+    }
+
+    return [
+        'message'        => 'success',
+        'expiry_updated' => false,
+        'reason'         => 'no_expiry_row_exists',
     ];
 }
 
