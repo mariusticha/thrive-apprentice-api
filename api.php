@@ -4,8 +4,12 @@ declare(strict_types=1);
 
 /**
  * Plugin Name: Thrive Apprentice API
- * Description: Exposes Thrive Apprentice access history and state per user.
- * Version: 1.5.0
+ * Description: Exposes Thrive Apprentice access data via REST API. Supports reading access history and
+ *              current access state per user (/accesses), querying accesses by time range (/accesses/since),
+ *              retrieving the product-to-course map (/product-course-map), and writing access changes:
+ *              revoke (/accesses/revoke), restore (/accesses/restore), update expiry (/accesses/update),
+ *              and permanently delete access records (/accesses/delete).
+ * Version: 2.0.0
  */
 
 if (! defined('ABSPATH')) {
