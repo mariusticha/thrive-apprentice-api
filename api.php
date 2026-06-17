@@ -647,9 +647,18 @@ function update_user_access(WP_REST_Request $request): WP_Error | array
 
     // Update the usermeta expiry row for each derived product ID
     $rows_affected = 0;
+    $matching_rows = 0;
 
     foreach ($product_ids as $product_id) {
         $meta_key = "tva_product_{$product_id}_access_expiry";
+
+        $matching_rows += (int) $wpdb->get_var(
+            $wpdb->prepare(
+                "SELECT COUNT(*) FROM {$wpdb->usermeta} WHERE user_id = %d AND meta_key = %s",
+                $user_id,
+                $meta_key
+            )
+        );
 
         $wpdb->query(
             $wpdb->prepare(
@@ -667,6 +676,14 @@ function update_user_access(WP_REST_Request $request): WP_Error | array
         return [
             'message'        => 'success',
             'expiry_updated' => true,
+        ];
+    }
+
+    if ($matching_rows > 0) {
+        return [
+            'message'        => 'success',
+            'expiry_updated' => false,
+            'reason'         => 'expiry_unchanged',
         ];
     }
 
