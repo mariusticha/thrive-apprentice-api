@@ -546,6 +546,41 @@ function update_user_access(WP_REST_Request $request): WP_Error | array
 
     $product_ids = $context['product_ids'];
 
+    // Batch-fetch expiry configs and verify every target product allows custom expiry.
+    // Only 'after_purchase' products store a per-user date in usermeta — all other
+    // modes ('unlimited', 'specific_time', 'not_configured', 'other') use a fixed or
+    // absent expiry that must not be overridden by this endpoint.
+    $expiry_ph      = implode(',', array_fill(0, count($product_ids), '%d'));
+    $expiry_rows    = $wpdb->get_results(
+        $wpdb->prepare(
+            "SELECT term_id, meta_value FROM {$wpdb->termmeta} WHERE term_id IN ($expiry_ph) AND meta_key = 'access_expiry'",
+            ...$product_ids
+        ),
+        ARRAY_A
+    );
+
+    $expiry_configs = [];
+
+    foreach ($expiry_rows as $row) {
+        $expiry_configs[(int) $row['term_id']] = $row['meta_value'];
+    }
+
+    foreach ($product_ids as $product_id) {
+        $expiry_info = parse_product_expiry($product_id, $expiry_configs);
+
+        if ($expiry_info['mode'] !== 'after_purchase') {
+            return new WP_Error(
+                'product_expiry_cannot_be_updated',
+                sprintf(
+                    "Product %d uses expiry mode '%s'. Only 'after_purchase' products support a custom per-user expiry date.",
+                    $product_id,
+                    $expiry_info['mode']
+                ),
+                ['status' => 422]
+            );
+        }
+    }
+
     $has_updated = false;
     $has_created = false;
 
