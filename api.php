@@ -232,28 +232,18 @@ function revoke_user_accesses(WP_REST_Request $request): WP_Error | array
     $params = $request->get_json_params();
 
     // Validate user_id
-    $user_id = isset($params['user_id']) ? intval($params['user_id']) : 0;
+    $user_id = parse_user_id_param($params['user_id'] ?? null);
 
-    if ($user_id === 0) {
-        return new WP_Error(
-            'invalid_user_id',
-            'user_id must be a non-zero integer',
-            ['status' => 400]
-        );
+    if ($user_id instanceof WP_Error) {
+        return $user_id;
     }
 
     // Validate record_ids
-    $record_ids = $params['record_ids'] ?? null;
+    $record_ids = parse_record_ids_param($params['record_ids'] ?? null);
 
-    if (! is_array($record_ids) || empty($record_ids)) {
-        return new WP_Error(
-            'invalid_record_ids',
-            'record_ids must be a non-empty array',
-            ['status' => 400]
-        );
+    if ($record_ids instanceof WP_Error) {
+        return $record_ids;
     }
-
-    $record_ids = array_values(array_unique(array_map('intval', $record_ids)));
 
     // Validate resource
     $resource = $params['resource'] ?? '';
@@ -318,28 +308,18 @@ function restore_user_accesses(WP_REST_Request $request): WP_Error | array
     $params = $request->get_json_params();
 
     // Validate user_id
-    $user_id = isset($params['user_id']) ? intval($params['user_id']) : 0;
+    $user_id = parse_user_id_param($params['user_id'] ?? null);
 
-    if ($user_id === 0) {
-        return new WP_Error(
-            'invalid_user_id',
-            'user_id must be a non-zero integer',
-            ['status' => 400]
-        );
+    if ($user_id instanceof WP_Error) {
+        return $user_id;
     }
 
     // Validate record_ids
-    $record_ids = $params['record_ids'] ?? null;
+    $record_ids = parse_record_ids_param($params['record_ids'] ?? null);
 
-    if (! is_array($record_ids) || empty($record_ids)) {
-        return new WP_Error(
-            'invalid_record_ids',
-            'record_ids must be a non-empty array',
-            ['status' => 400]
-        );
+    if ($record_ids instanceof WP_Error) {
+        return $record_ids;
     }
-
-    $record_ids = array_values(array_unique(array_map('intval', $record_ids)));
 
     // Validate resource
     $resource = $params['resource'] ?? '';
@@ -404,28 +384,18 @@ function delete_user_accesses(WP_REST_Request $request): WP_Error | array
     $params = $request->get_json_params();
 
     // Validate user_id
-    $user_id = isset($params['user_id']) ? intval($params['user_id']) : 0;
+    $user_id = parse_user_id_param($params['user_id'] ?? null);
 
-    if ($user_id === 0) {
-        return new WP_Error(
-            'invalid_user_id',
-            'user_id must be a non-zero integer',
-            ['status' => 400]
-        );
+    if ($user_id instanceof WP_Error) {
+        return $user_id;
     }
 
     // Validate record_ids
-    $record_ids = $params['record_ids'] ?? null;
+    $record_ids = parse_record_ids_param($params['record_ids'] ?? null);
 
-    if (! is_array($record_ids) || empty($record_ids)) {
-        return new WP_Error(
-            'invalid_record_ids',
-            'record_ids must be a non-empty array',
-            ['status' => 400]
-        );
+    if ($record_ids instanceof WP_Error) {
+        return $record_ids;
     }
-
-    $record_ids = array_values(array_unique(array_map('intval', $record_ids)));
 
     // Validate resource
     $resource = $params['resource'] ?? '';
@@ -521,25 +491,17 @@ function update_user_access(WP_REST_Request $request): WP_Error | array
     $params = $request->get_json_params();
 
     // Validate user_id
-    $user_id = isset($params['user_id']) ? intval($params['user_id']) : 0;
+    $user_id = parse_user_id_param($params['user_id'] ?? null);
 
-    if ($user_id === 0) {
-        return new WP_Error(
-            'invalid_user_id',
-            'user_id must be a non-zero integer',
-            ['status' => 400]
-        );
+    if ($user_id instanceof WP_Error) {
+        return $user_id;
     }
 
     // Validate record_id
-    $record_id = isset($params['record_id']) ? intval($params['record_id']) : 0;
+    $record_id = parse_record_id_param($params['record_id'] ?? null);
 
-    if ($record_id === 0) {
-        return new WP_Error(
-            'invalid_record_id',
-            'record_id must be a non-zero integer',
-            ['status' => 400]
-        );
+    if ($record_id instanceof WP_Error) {
+        return $record_id;
     }
 
     // Validate resource
@@ -1270,6 +1232,101 @@ function apprentice_extract_course_ids(string $post_content): array
     }
 
     return array_values(array_unique($course_ids));
+}
+
+function exceeds_php_int_max(mixed $value): bool
+{
+    if (is_float($value) && $value > PHP_INT_MAX) {
+        return true;
+    }
+
+    if (is_string($value)) {
+        $trimmed = trim($value);
+
+        if (preg_match('/^\d+$/', $trimmed) === 1) {
+            $normalized = ltrim($trimmed, '0');
+            $normalized = $normalized === '' ? '0' : $normalized;
+            $max_int    = (string) PHP_INT_MAX;
+
+            if (
+                strlen($normalized) > strlen($max_int)
+                || (strlen($normalized) === strlen($max_int) && strcmp($normalized, $max_int) > 0)
+            ) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+function parse_user_id_param(mixed $raw_user_id): WP_Error | int
+{
+    if (exceeds_php_int_max($raw_user_id)) {
+        return new WP_Error(
+            'user_id_exceeds_max',
+            'user_id exceeds the maximum supported integer value: ' . PHP_INT_MAX,
+            ['status' => 400]
+        );
+    }
+
+    $user_id = intval($raw_user_id);
+
+    if ($user_id === 0) {
+        return new WP_Error(
+            'invalid_user_id',
+            'user_id must be a non-zero integer',
+            ['status' => 400]
+        );
+    }
+
+    return $user_id;
+}
+
+function parse_record_id_param(mixed $raw_record_id): WP_Error | int
+{
+    if (exceeds_php_int_max($raw_record_id)) {
+        return new WP_Error(
+            'record_id_exceeds_max',
+            'record_id exceeds the maximum supported integer value: ' . PHP_INT_MAX,
+            ['status' => 400]
+        );
+    }
+
+    $record_id = intval($raw_record_id);
+
+    if ($record_id === 0) {
+        return new WP_Error(
+            'invalid_record_id',
+            'record_id must be a non-zero integer',
+            ['status' => 400]
+        );
+    }
+
+    return $record_id;
+}
+
+function parse_record_ids_param(mixed $raw_record_ids): WP_Error | array
+{
+    if (! is_array($raw_record_ids) || empty($raw_record_ids)) {
+        return new WP_Error(
+            'invalid_record_ids',
+            'record_ids must be a non-empty array',
+            ['status' => 400]
+        );
+    }
+
+    foreach ($raw_record_ids as $item) {
+        if (exceeds_php_int_max($item)) {
+            return new WP_Error(
+                'record_id_exceeds_max',
+                'One or more record_ids exceed the maximum supported integer value',
+                ['status' => 400]
+            );
+        }
+    }
+
+    return array_values(array_unique(array_map('intval', $raw_record_ids)));
 }
 
 function check_user_exists(int $user_id): WP_Error | null
