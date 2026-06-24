@@ -266,29 +266,19 @@ function revoke_user_accesses(WP_REST_Request $request): WP_Error | array
         );
     }
 
-    // Find orders/items that are currently active (order status=1, item status=1)
-    if ($resource === 'order') {
-        $matched = find_order_items_by_order_ids($user_id, $record_ids, order_status: 1, item_status: 1);
+    $context = build_semantic_context(
+        $user_id,
+        $resource,
+        $record_ids,
+        order_status: 1,
+        item_status: 1
+    );
 
-        if (isset($matched['ambiguous_order_ids'])) {
-            $ids = implode(', ', $matched['ambiguous_order_ids']);
-            return new WP_Error(
-                'ambiguous_order',
-                "Action not possible: order(s) {$ids} contain multiple products. Use resource=product instead.",
-                ['status' => 422]
-            );
-        }
-    } else {
-        $matched = find_order_items_for_access_update($user_id, $record_ids, order_status: 1, item_status: 1);
+    if ($context instanceof WP_Error) {
+        return $context;
     }
 
-    if (empty($matched['item_ids'])) {
-        return [
-            'message'        => 'success',
-            'orders_updated' => 0,
-            'items_updated'  => 0,
-        ];
-    }
+    $matched = $context;
 
     // Batch update orders
     $order_placeholders = implode(',', array_fill(0, count($matched['order_ids']), '%d'));
@@ -362,29 +352,19 @@ function restore_user_accesses(WP_REST_Request $request): WP_Error | array
         );
     }
 
-    // Find orders/items that are currently revoked (order status=4, item status=0)
-    if ($resource === 'order') {
-        $matched = find_order_items_by_order_ids($user_id, $record_ids, order_status: 4, item_status: 0);
+    $context = build_semantic_context(
+        $user_id,
+        $resource,
+        $record_ids,
+        order_status: 4,
+        item_status: 0
+    );
 
-        if (isset($matched['ambiguous_order_ids'])) {
-            $ids = implode(', ', $matched['ambiguous_order_ids']);
-            return new WP_Error(
-                'ambiguous_order',
-                "Action not possible: order(s) {$ids} contain multiple products. Use resource=product instead.",
-                ['status' => 422]
-            );
-        }
-    } else {
-        $matched = find_order_items_for_access_update($user_id, $record_ids, order_status: 4, item_status: 0);
+    if ($context instanceof WP_Error) {
+        return $context;
     }
 
-    if (empty($matched['item_ids'])) {
-        return [
-            'message'        => 'success',
-            'orders_updated' => 0,
-            'items_updated'  => 0,
-        ];
-    }
+    $matched = $context;
 
     // Batch restore orders to active
     $order_placeholders = implode(',', array_fill(0, count($matched['order_ids']), '%d'));
@@ -458,52 +438,40 @@ function delete_user_accesses(WP_REST_Request $request): WP_Error | array
         );
     }
 
-    // Find all matching orders/items regardless of status
-    if ($resource === 'order') {
-        $matched = find_order_items_by_order_ids($user_id, $record_ids);
+    $context = build_semantic_context($user_id, $resource, $record_ids);
 
-        if (isset($matched['ambiguous_order_ids'])) {
-            $ids = implode(', ', $matched['ambiguous_order_ids']);
-            return new WP_Error(
-                'ambiguous_order',
-                "Action not possible: order(s) {$ids} contain multiple products. Use resource=product instead.",
-                ['status' => 422]
-            );
-        }
-
-        $product_ids = $matched['product_ids'];
-    } else {
-        $matched     = find_order_items_for_access_update($user_id, $record_ids);
-        $product_ids = $record_ids;
+    if ($context instanceof WP_Error) {
+        return $context;
     }
+
+    $matched     = $context;
+    $product_ids = $context['product_ids'];
 
     $orders_deleted = 0;
     $items_deleted  = 0;
 
-    if (! empty($matched['item_ids'])) {
-        // Delete items before orders (FK safety)
-        $item_placeholders = implode(',', array_fill(0, count($matched['item_ids']), '%d'));
+    // Delete items before orders (FK safety)
+    $item_placeholders = implode(',', array_fill(0, count($matched['item_ids']), '%d'));
 
-        $wpdb->query(
-            $wpdb->prepare(
-                "DELETE FROM {$wpdb->prefix}tva_order_items WHERE id IN ($item_placeholders)",
-                ...$matched['item_ids']
-            )
-        );
+    $wpdb->query(
+        $wpdb->prepare(
+            "DELETE FROM {$wpdb->prefix}tva_order_items WHERE id IN ($item_placeholders)",
+            ...$matched['item_ids']
+        )
+    );
 
-        $items_deleted = $wpdb->rows_affected;
+    $items_deleted = $wpdb->rows_affected;
 
-        $order_placeholders = implode(',', array_fill(0, count($matched['order_ids']), '%d'));
+    $order_placeholders = implode(',', array_fill(0, count($matched['order_ids']), '%d'));
 
-        $wpdb->query(
-            $wpdb->prepare(
-                "DELETE FROM {$wpdb->prefix}tva_orders WHERE ID IN ($order_placeholders)",
-                ...$matched['order_ids']
-            )
-        );
+    $wpdb->query(
+        $wpdb->prepare(
+            "DELETE FROM {$wpdb->prefix}tva_orders WHERE ID IN ($order_placeholders)",
+            ...$matched['order_ids']
+        )
+    );
 
-        $orders_deleted = $wpdb->rows_affected;
-    }
+    $orders_deleted = $wpdb->rows_affected;
 
     if (! empty($product_ids)) {
         // Delete access history entries for this user + product IDs
@@ -608,89 +576,87 @@ function update_user_access(WP_REST_Request $request): WP_Error | array
 
     $expires_at = date('Y-m-d H:i:s', $parsed);
 
-    if ($resource === 'order') {
-        // Look up the order, verify ownership, and derive product IDs from its items
-        $matched = find_order_items_by_order_ids($user_id, [$record_id]);
+    $context = build_semantic_context($user_id, $resource, [$record_id]);
 
-        if (isset($matched['ambiguous_order_ids'])) {
-            $ids = implode(', ', $matched['ambiguous_order_ids']);
-            return new WP_Error(
-                'ambiguous_order',
-                "Action not possible: order(s) {$ids} contain multiple products. Use resource=product instead.",
-                ['status' => 422]
-            );
-        }
-
-        if (empty($matched['item_ids'])) {
-            return [
-                'message'        => 'success',
-                'expiry_updated' => false,
-                'reason'         => 'no_orders_found',
-            ];
-        }
-
-        $product_ids = $matched['product_ids'];
-    } else {
-        // Confirm orders exist for this user + product (any status)
-        $matched = find_order_items_for_access_update($user_id, [$record_id]);
-
-        if (empty($matched['item_ids'])) {
-            return [
-                'message'        => 'success',
-                'expiry_updated' => false,
-                'reason'         => 'no_orders_found',
-            ];
-        }
-
-        $product_ids = [$record_id];
+    if ($context instanceof WP_Error) {
+        return $context;
     }
 
-    // Update the usermeta expiry row for each derived product ID
-    $rows_affected = 0;
-    $matching_rows = 0;
+    $product_ids = $context['product_ids'];
+
+    $has_updated = false;
+    $has_created = false;
 
     foreach ($product_ids as $product_id) {
         $meta_key = "tva_product_{$product_id}_access_expiry";
 
-        $matching_rows += (int) $wpdb->get_var(
+        $existing = $wpdb->get_var(
             $wpdb->prepare(
-                "SELECT COUNT(*) FROM {$wpdb->usermeta} WHERE user_id = %d AND meta_key = %s",
+                "SELECT meta_value FROM {$wpdb->usermeta} WHERE user_id = %d AND meta_key = %s LIMIT 1",
                 $user_id,
                 $meta_key
             )
         );
 
-        $wpdb->query(
-            $wpdb->prepare(
-                "UPDATE {$wpdb->usermeta} SET meta_value = %s WHERE user_id = %d AND meta_key = %s",
-                $expires_at,
-                $user_id,
-                $meta_key
-            )
+        if ($existing !== null) {
+            if ((string) $existing === $expires_at) {
+                continue;
+            }
+
+            $result = $wpdb->query(
+                $wpdb->prepare(
+                    "UPDATE {$wpdb->usermeta} SET meta_value = %s WHERE user_id = %d AND meta_key = %s",
+                    $expires_at,
+                    $user_id,
+                    $meta_key
+                )
+            );
+
+            if ($result === false) {
+                return new WP_Error(
+                    'db_write_failed',
+                    'Failed to update expiry value.',
+                    ['status' => 500]
+                );
+            }
+
+            $has_updated = true;
+            continue;
+        }
+
+        $result = $wpdb->insert(
+            $wpdb->usermeta,
+            [
+                'user_id'    => $user_id,
+                'meta_key'   => $meta_key,
+                'meta_value' => $expires_at,
+            ],
+            ['%d', '%s', '%s']
         );
 
-        $rows_affected += $wpdb->rows_affected;
+        if ($result === false) {
+            return new WP_Error(
+                'db_write_failed',
+                'Failed to create expiry value.',
+                ['status' => 500]
+            );
+        }
+
+        $has_created = true;
     }
 
-    if ($rows_affected > 0) {
-        return [
-            'message'        => 'success',
-            'expiry_updated' => true,
-        ];
-    }
-
-    if ($matching_rows > 0) {
-        return [
-            'message'        => 'success',
-            'expiry_updated' => false,
-            'reason'         => 'expiry_unchanged',
-        ];
+    // Keep a deterministic top-level outcome for multi-product order mode.
+    if ($has_updated) {
+        $info = 'expiry_updated';
+    } elseif ($has_created) {
+        $info = 'expiry_created';
+    } else {
+        $info = 'expiry_unchanged';
     }
 
     return [
-        'message'        => 'success',
-        'expiry_updated' => false,
-        'reason'         => 'no_expiry_row_exists',
+        'message' => 'success',
+        'info'    => $info,
     ];
 }
 
@@ -1304,6 +1270,159 @@ function apprentice_extract_course_ids(string $post_content): array
     }
 
     return array_values(array_unique($course_ids));
+}
+
+function check_user_exists(int $user_id): WP_Error | null
+{
+    if (! get_user_by('id', $user_id)) {
+        return new WP_Error(
+            'user_not_found',
+            "No user found for user_id {$user_id}.",
+            ['status' => 404]
+        );
+    }
+
+    return null;
+}
+
+function check_products_exist(array $product_ids): WP_Error | null
+{
+    global $wpdb;
+
+    if (empty($product_ids)) {
+        return null;
+    }
+
+    $product_ids = array_values(array_unique(array_map('intval', $product_ids)));
+    $placeholders = implode(',', array_fill(0, count($product_ids), '%d'));
+
+    $existing = $wpdb->get_col(
+        $wpdb->prepare(
+            "SELECT term_id FROM {$wpdb->terms} WHERE term_id IN ($placeholders)",
+            ...$product_ids
+        )
+    );
+
+    $existing = array_map('intval', $existing);
+    $missing  = array_values(array_diff($product_ids, $existing));
+
+    if (! empty($missing)) {
+        return new WP_Error(
+            'product_not_found',
+            'No product found for product_id(s): ' . implode(', ', $missing),
+            ['status' => 404]
+        );
+    }
+
+    return null;
+}
+
+function resolve_records_by_resource(
+    int $user_id,
+    string $resource,
+    array $record_ids,
+    ?int $order_status = null,
+    ?int $item_status = null,
+): WP_Error | array {
+    if ($resource === 'order') {
+        $matched = find_order_items_by_order_ids(
+            $user_id,
+            $record_ids,
+            $order_status,
+            $item_status
+        );
+
+        if (isset($matched['ambiguous_order_ids'])) {
+            $ids = implode(', ', $matched['ambiguous_order_ids']);
+            return new WP_Error(
+                'ambiguous_order',
+                "Action not possible: order(s) {$ids} contain multiple products. Use resource=product instead.",
+                ['status' => 422]
+            );
+        }
+
+        return [
+            'order_ids'   => $matched['order_ids'] ?? [],
+            'item_ids'    => $matched['item_ids'] ?? [],
+            'product_ids' => $matched['product_ids'] ?? [],
+        ];
+    }
+
+    $matched = find_order_items_for_access_update(
+        $user_id,
+        $record_ids,
+        $order_status,
+        $item_status
+    );
+
+    return [
+        'order_ids'   => $matched['order_ids'] ?? [],
+        'item_ids'    => $matched['item_ids'] ?? [],
+        'product_ids' => $record_ids,
+    ];
+}
+
+function assert_resolved_records_exist(array $resolved): WP_Error | null
+{
+    if (empty($resolved['item_ids'])) {
+        return new WP_Error(
+            'no_orders_found',
+            'No matching order records found for this request.',
+            ['status' => 422]
+        );
+    }
+
+    return null;
+}
+
+function build_semantic_context(
+    int $user_id,
+    string $resource,
+    array $record_ids,
+    ?int $order_status = null,
+    ?int $item_status = null,
+): WP_Error | array {
+    $user_check = check_user_exists($user_id);
+
+    if ($user_check instanceof WP_Error) {
+        return $user_check;
+    }
+
+    if ($resource === 'product') {
+        $product_check = check_products_exist($record_ids);
+
+        if ($product_check instanceof WP_Error) {
+            return $product_check;
+        }
+    }
+
+    $resolved = resolve_records_by_resource(
+        $user_id,
+        $resource,
+        $record_ids,
+        $order_status,
+        $item_status
+    );
+
+    if ($resolved instanceof WP_Error) {
+        return $resolved;
+    }
+
+    $exists_check = assert_resolved_records_exist($resolved);
+
+    if ($exists_check instanceof WP_Error) {
+        return $exists_check;
+    }
+
+    if ($resource === 'order') {
+        $product_check = check_products_exist($resolved['product_ids']);
+
+        if ($product_check instanceof WP_Error) {
+            return $product_check;
+        }
+    }
+
+    return $resolved;
 }
 
 function find_order_items_for_access_update(
