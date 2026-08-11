@@ -232,7 +232,7 @@ add_action('rest_api_init', function (): void {
         'apprentice/v1',
         '/users/delete',
         [
-            'methods'             => 'POST',
+            'methods'             => 'DELETE',
             'callback'            => 'delete_wp_user',
             'permission_callback' => function (): bool {
                 return current_user_can('list_users');
