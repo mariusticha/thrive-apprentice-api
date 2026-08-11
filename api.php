@@ -8,7 +8,8 @@ declare(strict_types=1);
  *              current access state per user (/accesses), querying accesses by time range (/accesses/since),
  *              retrieving the product-to-course map (/product-course-map), and writing access changes:
  *              revoke (/accesses/revoke), restore (/accesses/restore), update expiry (/accesses/update),
- *              and permanently delete access records (/accesses/delete).
+ *              permanently delete access records (/accesses/delete), and delete a WP user with all
+ *              Thrive Apprentice data (/users/delete).
  * Version: 2.0.0
  */
 
@@ -216,6 +217,30 @@ add_action('rest_api_init', function (): void {
                     'required'          => true,
                     'type'              => 'string',
                     'validate_callback' => fn($v) => in_array($v, ['product', 'order'], true),
+                ],
+            ],
+        ]
+    );
+});
+
+/**
+ *  /users/delete
+ */
+add_action('rest_api_init', function (): void {
+
+    register_rest_route(
+        'apprentice/v1',
+        '/users/delete',
+        [
+            'methods'             => 'POST',
+            'callback'            => 'delete_wp_user',
+            'permission_callback' => function (): bool {
+                return current_user_can('list_users');
+            },
+            'args' => [
+                'user_id' => [
+                    'required' => true,
+                    'type'     => 'integer',
                 ],
             ],
         ]
@@ -481,6 +506,103 @@ function delete_user_accesses(WP_REST_Request $request): WP_Error | array
         'items_deleted'    => $items_deleted,
         'history_deleted'  => $history_deleted,
         'usermeta_deleted' => $usermeta_deleted,
+    ];
+}
+
+function delete_wp_user(WP_REST_Request $request): WP_Error | array
+{
+    global $wpdb;
+
+    $params = $request->get_json_params();
+
+    $user_id = parse_user_id_param($params['user_id'] ?? null);
+
+    if ($user_id instanceof WP_Error) {
+        return $user_id;
+    }
+
+    $user = get_user_by('id', $user_id);
+
+    if (! $user) {
+        return new WP_Error(
+            'user_not_found',
+            "No user found for user_id {$user_id}.",
+            ['status' => 404]
+        );
+    }
+
+    if (in_array('administrator', $user->roles, true)) {
+        return new WP_Error(
+            'cannot_delete_admin',
+            'Deleting users with the administrator role is not allowed.',
+            ['status' => 422]
+        );
+    }
+
+    if (get_current_user_id() === $user_id) {
+        return new WP_Error(
+            'cannot_delete_self',
+            'You cannot delete your own account via this endpoint.',
+            ['status' => 422]
+        );
+    }
+
+    // Delete order items before orders (FK safety)
+    $order_ids = $wpdb->get_col(
+        $wpdb->prepare(
+            "SELECT ID FROM {$wpdb->prefix}tva_orders WHERE user_id = %d",
+            $user_id
+        )
+    );
+
+    $items_deleted = 0;
+
+    if (! empty($order_ids)) {
+        $order_placeholders = implode(',', array_fill(0, count($order_ids), '%d'));
+
+        $wpdb->query(
+            $wpdb->prepare(
+                "DELETE FROM {$wpdb->prefix}tva_order_items WHERE order_id IN ($order_placeholders)",
+                ...$order_ids
+            )
+        );
+
+        $items_deleted = $wpdb->rows_affected;
+    }
+
+    $wpdb->query(
+        $wpdb->prepare(
+            "DELETE FROM {$wpdb->prefix}tva_orders WHERE user_id = %d",
+            $user_id
+        )
+    );
+
+    $orders_deleted = $wpdb->rows_affected;
+
+    $wpdb->query(
+        $wpdb->prepare(
+            "DELETE FROM {$wpdb->prefix}tva_access_history WHERE user_id = %d",
+            $user_id
+        )
+    );
+
+    $history_deleted = $wpdb->rows_affected;
+
+    // wp_delete_user removes the wp_users row, all usermeta, and the user's posts
+    if (! wp_delete_user($user_id)) {
+        return new WP_Error(
+            'user_delete_failed',
+            'wp_delete_user() returned false — the user could not be deleted.',
+            ['status' => 500]
+        );
+    }
+
+    return [
+        'message'         => 'success',
+        'orders_deleted'  => $orders_deleted,
+        'items_deleted'   => $items_deleted,
+        'history_deleted' => $history_deleted,
+        'user_deleted'    => true,
     ];
 }
 
