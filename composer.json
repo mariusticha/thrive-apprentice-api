@@ -1,0 +1,26 @@
+{
+    "name": "thrive-apprentice/api",
+    "description": "Thrive Apprentice REST API plugin",
+    "type": "wordpress-plugin",
+    "require": {},
+    "require-dev": {
+        "pestphp/pest": "^3.0",
+        "brain/monkey": "^2.6",
+        "mockery/mockery": "^1.6"
+    },
+    "autoload": {
+        "psr-4": {
+            "ThriveApi\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "ThriveApi\\Tests\\": "tests/"
+        }
+    },
+    "config": {
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        }
+    }
+}
