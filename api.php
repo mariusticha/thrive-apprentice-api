@@ -1305,37 +1305,32 @@ function apprentice_product_course_map(): array
 
 function apprentice_create_user(WP_REST_Request $request): WP_REST_Response
 {
-    // --- email (required) ---
-    $email = $request->get_param('email');
-    if (!is_string($email) || !is_email(trim($email))) {
-        return apprentice_users_response('fail', 'A valid email address is required.', null, 400);
+    // --- validate: all fields required ---
+    foreach (['email', 'first_name', 'last_name', 'password'] as $field) {
+        $value = $request->get_param($field);
+        if (!is_string($value) || trim($value) === '') {
+            return apprentice_users_response('fail', "{$field} is required and must be a non-empty string.", null, 400);
+        }
     }
-    $email = sanitize_email(trim($email));
 
-    // The email is also used as the login name, so check both.
+    $notify_user = $request->get_param('notify_user');
+    if (!is_bool($notify_user)) {
+        return apprentice_users_response('fail', 'notify_user is required and must be a boolean.', null, 400);
+    }
+
+    $email = trim($request->get_param('email'));
+    if (!is_email($email)) {
+        return apprentice_users_response('fail', 'email is not a valid email address.', null, 400);
+    }
+    $email = sanitize_email($email);
+
     if (email_exists($email) || username_exists($email)) {
         return apprentice_users_response('fail', 'A user with this email address already exists.', null, 409);
     }
 
-    // --- optional fields ---
-    $first_name = $request->get_param('first_name');
-    $last_name  = $request->get_param('last_name');
-    $first_name = is_string($first_name) ? sanitize_text_field($first_name) : '';
-    $last_name  = is_string($last_name) ? sanitize_text_field($last_name) : '';
-
+    $first_name = sanitize_text_field($request->get_param('first_name'));
+    $last_name  = sanitize_text_field($request->get_param('last_name'));
     $password = $request->get_param('password');
-    if ($password !== null && !is_string($password)) {
-        return apprentice_users_response('fail', 'password must be a string.', null, 400);
-    }
-    if ($password === null || $password === '') {
-        $password = wp_generate_password(32, true, true); // throwaway, nobody ever sees it
-    }
-
-    // Defaults to true, since without a known password the user
-    // could otherwise never log in.
-    $notify_user = $request->has_param('notify_user')
-        ? rest_sanitize_boolean($request->get_param('notify_user'))
-        : true;
 
     // --- create user ---
     $display_name = trim($first_name . ' ' . $last_name);
