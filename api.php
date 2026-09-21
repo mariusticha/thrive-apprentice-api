@@ -1373,6 +1373,7 @@ function apprentice_create_user(WP_REST_Request $request): WP_REST_Response
         'last_name'  => $user->last_name,
         'roles'      => array_values($user->roles),
         'registered' => $user->user_registered,
+        'user_notified' => $notify_user,
     ], 201);
 }
 
