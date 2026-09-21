@@ -224,6 +224,19 @@ add_action('rest_api_init', function (): void {
 });
 
 /**
+ *  /users/create
+ */
+add_action('rest_api_init', function () {
+    register_rest_route('apprentice/v1', '/users', [
+        'methods'             => WP_REST_Server::CREATABLE, // POST
+        'callback'            => 'apprentice_create_user',
+        'permission_callback' => function () {
+            return current_user_can('create_users');
+        },
+    ]);
+});
+
+/**
  *  /users/delete
  */
 add_action('rest_api_init', function (): void {
@@ -1286,6 +1299,79 @@ function apprentice_product_course_map(): array
     ];
 }
 
+function apprentice_create_user(WP_REST_Request $request): WP_REST_Response
+{
+    // --- email (required) ---
+    $email = $request->get_param('email');
+    if (!is_string($email) || !is_email(trim($email))) {
+        return apprentice_users_response('fail', 'A valid email address is required.', null, 400);
+    }
+    $email = sanitize_email(trim($email));
+
+    // The email is also used as the login name, so check both.
+    if (email_exists($email) || username_exists($email)) {
+        return apprentice_users_response('fail', 'A user with this email address already exists.', null, 409);
+    }
+
+    // --- optional fields ---
+    $first_name = $request->get_param('first_name');
+    $last_name  = $request->get_param('last_name');
+    $first_name = is_string($first_name) ? sanitize_text_field($first_name) : '';
+    $last_name  = is_string($last_name) ? sanitize_text_field($last_name) : '';
+
+    $password = $request->get_param('password');
+    if ($password !== null && !is_string($password)) {
+        return apprentice_users_response('fail', 'password must be a string.', null, 400);
+    }
+    if ($password === null || $password === '') {
+        $password = wp_generate_password(32, true, true); // throwaway, nobody ever sees it
+    }
+
+    // Defaults to true, since without a known password the user
+    // could otherwise never log in.
+    $notify_user = $request->has_param('notify_user')
+        ? rest_sanitize_boolean($request->get_param('notify_user'))
+        : true;
+
+    // --- create user ---
+    $display_name = trim($first_name . ' ' . $last_name);
+    if ($display_name === '') {
+        $display_name = strstr($email, '@', true);
+    }
+
+    $user_id = wp_insert_user([
+        'user_login'   => $email,
+        'user_email'   => $email,
+        'user_pass'    => $password,
+        'first_name'   => $first_name,
+        'last_name'    => $last_name,
+        'display_name' => $display_name,
+        'nickname'     => $display_name,
+        // 'role' omitted on purpose: WordPress uses the site's default role
+    ]);
+
+    if (is_wp_error($user_id)) {
+        return apprentice_users_response('fail', wp_strip_all_tags($user_id->get_error_message()), null, 400);
+    }
+
+    // Sends the standard "set your password" mail to the user only.
+    if ($notify_user) {
+        wp_new_user_notification($user_id, null, 'user');
+    }
+
+    $user = get_userdata($user_id);
+
+    return apprentice_users_response('success', null, [
+        'id'         => $user->ID,
+        'email'      => $user->user_email,
+        'username'   => $user->user_login,
+        'first_name' => $user->first_name,
+        'last_name'  => $user->last_name,
+        'roles'      => array_values($user->roles),
+        'registered' => $user->user_registered,
+    ], 201);
+}
+
 
 /* - - -  H E L P E R S  - - - */
 
@@ -2181,4 +2267,13 @@ function evaluate_current_accesses(
         'outdated_accesses' => $outdated_accesses,
         'outdated_accesses_count' => count($outdated_accesses),
     ];
+}
+
+function apprentice_users_response(string $message, ?string $error, ?array $data, int $status): WP_REST_Response
+{
+    return new WP_REST_Response([
+        'message' => $message,
+        'error'   => $error,
+        'data'    => $data,
+    ], $status);
 }
