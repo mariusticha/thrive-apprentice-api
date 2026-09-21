@@ -227,13 +227,17 @@ add_action('rest_api_init', function (): void {
  *  /users/create
  */
 add_action('rest_api_init', function () {
-    register_rest_route('apprentice/v1', '/users', [
-        'methods'             => WP_REST_Server::CREATABLE, // POST
-        'callback'            => 'apprentice_create_user',
-        'permission_callback' => function () {
-            return current_user_can('create_users');
-        },
-    ]);
+    register_rest_route(
+        'apprentice/v1',
+        '/users',
+        [
+            'methods'             => WP_REST_Server::CREATABLE, // POST
+            'callback'            => 'apprentice_create_user',
+            'permission_callback' => function () {
+                return current_user_can('create_users');
+            },
+        ]
+    );
 });
 
 /**
